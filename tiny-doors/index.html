@@ -95,8 +95,10 @@
     position: absolute;
     inset: 0;
     border-radius: 4px;
-    background: var(--recess);
-    box-shadow: inset 0 3px 12px #000, inset 0 0 0 1px #2b1d12;
+    /* a box that has been shut: deeper, with a little light falling in
+       from the opening at the top */
+    background: radial-gradient(125% 95% at 50% 0%, #1a1209, #0c0805 72%);
+    box-shadow: inset 0 4px 16px #000, inset 0 0 0 1px #2b1d12;
     display: grid;
     place-content: center;
     justify-items: center;
@@ -117,7 +119,6 @@
     max-width: 100%;      /* the compartment decides, never a ch count */
     overflow-wrap: break-word;
   }
-  .door.wide .cap { max-width: 30ch; }
 
   /* the swinging panel */
   .panel {
@@ -138,10 +139,10 @@
      edge-on, so very little of the opening stays covered. */
   .door.open .panel { transform: rotateY(-83deg); }
   .door.open.hinge-right .panel { transform: rotateY(83deg); }
-  /* and the contents shift clear of the hinge, so nothing is read
-     through a door that happens to be standing in front of it */
-  .door.open:not(.hinge-right) .inside { padding-left: 13px; }
-  .door.open.hinge-right .inside { padding-right: 13px; }
+  /* Contents shift clear of the hinge so nothing is read through a door
+     standing in front of it. The distance scales with the compartment
+     width (a swung panel is ~12% of its own width), so it is set inline
+     in openDoor rather than as a fixed number here. */
   /* an open door is in front of the cabinet face, never behind it */
   .door.open, .door.closing { z-index: 5; }
   /* a tight shadow: the old 22px spread was itself darkening the contents */
@@ -178,8 +179,10 @@
        accident, via the perspective that used to sit on the wall */
     position: relative;
     border-radius: 4px;
-    background: linear-gradient(180deg, #17100a, var(--recess));
-    box-shadow: inset 0 3px 14px #000, inset 0 0 0 1px #2b1d12;
+    /* never had a door, so it takes ambient light from the room: warmer
+       and a shade lighter than a compartment that was closed */
+    background: linear-gradient(180deg, #322416 0%, #201509 58%, #170f08 100%);
+    box-shadow: inset 0 2px 10px rgba(0,0,0,.72), inset 0 0 0 1px #3a2711;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -584,6 +587,15 @@ function fill(door, find) {
   cap.style.fontSize = '';
 }
 
+/* A swung panel covers cos(83deg), about 12%, of its own width. A wide
+   compartment therefore needs proportionally more clearance than a narrow
+   one, which a fixed padding cannot give it. */
+function clearHinge(door) {
+  const inside = door.querySelector('.inside');
+  const gap = Math.round(door.offsetWidth * 0.125) + 6;
+  inside.style[door.classList.contains('hinge-right') ? 'paddingRight' : 'paddingLeft'] = gap + 'px';
+}
+
 /* Shrink a long caption until the compartment can hold it. Runs after the
    door is marked open so the shift clear of the hinge is accounted for. */
 function fitCaption(door) {
@@ -602,6 +614,7 @@ function openDoor(door, quiet) {
   fill(door, pickFind());
   door.style.zIndex = ++zTop;   // newest door swings in front of the rest
   door.classList.add('open');
+  clearHinge(door);
   fitCaption(door);
   openedSinceShuffle++;
   if (!quiet) FX.creak();
@@ -616,6 +629,8 @@ function shut(door) {
   setTimeout(() => {
     door.classList.remove('closing');
     door.style.zIndex = '';
+    const inside = door.querySelector('.inside');
+    inside.style.paddingLeft = inside.style.paddingRight = '';
   }, 620);
 }
 
