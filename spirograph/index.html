@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sentence Spirograph</title>
+<style>
+  :root {
+    --bg: #0b0d12;
+    --panel: #141821;
+    --line: #262c3a;
+    --ink: #e8ecf5;
+    --dim: #7c8598;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.4 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    overflow: hidden;
+  }
+
+  header { padding: 14px 18px 10px; }
+  #text {
+    width: 100%;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    color: var(--ink);
+    font: 17px/1.4 ui-sans-serif, system-ui, sans-serif;
+    padding: 12px 14px;
+    outline: none;
+  }
+  #text:focus { border-color: #46506a; }
+
+  main { position: relative; min-height: 0; }
+  canvas { width: 100%; height: 100%; display: block; }
+
+  footer {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px;
+    align-items: center;
+    padding: 12px 18px 16px;
+    border-top: 1px solid var(--line);
+    background: var(--panel);
+  }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--dim); letter-spacing: .06em; text-transform: uppercase; }
+  label span b { color: var(--ink); font-weight: 600; }
+  input[type=range] { width: 130px; accent-color: #8ea2ff; }
+  button {
+    margin-left: auto;
+    background: #8ea2ff;
+    color: #0b0d12;
+    border: 0;
+    border-radius: 8px;
+    padding: 10px 16px;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:hover { background: #a6b6ff; }
+</style>
+</head>
+<body>
+
+<header>
+  <input id="text" value="Kristin" spellcheck="false" autocomplete="off">
+</header>
+
+<main><canvas id="stage"></canvas></main>
+
+<footer>
+  <label><span>Loops <b id="vLoops"></b></span><input id="loops" type="range" min="1" max="60" value="24"></label>
+  <label><span>Petals <b id="vPetals"></b></span><input id="petals" type="range" min="1" max="17" value="5"></label>
+  <label><span>Angle <b id="vAngle"></b></span><input id="angle" type="range" min="5" max="180" value="62"></label>
+  <label><span>Stride <b id="vStep"></b></span><input id="step" type="range" min="2" max="40" value="12"></label>
+  <label><span>Ink <b id="vWidth"></b></span><input id="width" type="range" min="1" max="8" step="0.5" value="1.5"></label>
+  <button id="save">Save PNG</button>
+</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+const cv = $('stage'), ctx = cv.getContext('2d');
+const MAX_POINTS = 90000;
+
+const CONTROLS = ['loops','petals','angle','step','width'];
+
+function params() {
+  return {
+    text: $('text').value || ' ',
+    loops: +$('loops').value,
+    petals: +$('petals').value,
+    angle: +$('angle').value,
+    step: +$('step').value,
+    width: +$('width').value,
+  };
+}
+
+/* --- the alphabet is the machine ------------------------------------- */
+
+function hash(n) {
+  let h = Math.imul(n ^ 0x9e3779b9, 2654435761);
+  h ^= h >>> 15;
+  h = Math.imul(h, 2246822507);
+  h ^= h >>> 13;
+  return h >>> 0;
+}
+
+const charSeed = c => hash(c.codePointAt(0));
+
+function textSeed(s) {
+  let h = 0x811c9dc5;
+  for (const c of s) h = hash(h ^ c.codePointAt(0));
+  return h;
+}
+
+/* Each character is a fixed turn plus a fixed stride. The pen never lifts. */
+function buildPath(p) {
+  const chars = [...p.text];
+  const steps = chars.map(c => {
+    const h = charSeed(c);
+    return {
+      turn: (((h % 73) - 36) / 36) * p.angle * Math.PI / 180,
+      len: 2 + ((h >>> 7) % 13) * (p.step / 10),
+    };
+  });
+
+  const loops = Math.max(1, Math.min(p.loops, Math.floor(MAX_POINTS / chars.length) || 1));
+  const netTurn = steps.reduce((a, s) => a + s.turn, 0);
+  // Nudge each pass so the whole thing closes into a rosette instead of wandering off.
+  const correction = (2 * Math.PI * p.petals / loops) - netTurn;
+
+  const pts = new Float64Array((loops * chars.length + 1) * 2);
+  let x = 0, y = 0, a = -Math.PI / 2, i = 0;
+  pts[i++] = 0; pts[i++] = 0;
+  for (let l = 0; l < loops; l++) {
+    for (const s of steps) {
+      a += s.turn;
+      x += Math.cos(a) * s.len;
+      y += Math.sin(a) * s.len;
+      pts[i++] = x; pts[i++] = y;
+    }
+    a += correction;
+  }
+  return { pts, count: i / 2, loops };
+}
+
+function bounds(pts, count) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (let i = 0; i < count * 2; i += 2) {
+    if (pts[i] < minX) minX = pts[i];
+    if (pts[i] > maxX) maxX = pts[i];
+    if (pts[i + 1] < minY) minY = pts[i + 1];
+    if (pts[i + 1] > maxY) maxY = pts[i + 1];
+  }
+  return { minX, minY, w: Math.max(maxX - minX, 1e-6), h: Math.max(maxY - minY, 1e-6) };
+}
+
+/* --- drawing ---------------------------------------------------------- */
+
+function draw(c, W, H, p, opts = {}) {
+  const pad = Math.min(W, H) * 0.09 + (opts.caption ? 20 : 0);
+  const { pts, count } = buildPath(p);
+  const b = bounds(pts, count);
+  const scale = Math.min((W - pad * 2) / b.w, (H - pad * 2 - (opts.caption ? 40 : 0)) / b.h);
+  const ox = (W - b.w * scale) / 2 - b.minX * scale;
+  const oy = (H - b.h * scale - (opts.caption ? 40 : 0)) / 2 - b.minY * scale;
+
+  c.fillStyle = getComputedStyle(document.body).getPropertyValue('--bg').trim() || '#0b0d12';
+  c.fillRect(0, 0, W, H);
+
+  const baseHue = textSeed(p.text) % 360;
+  const chunks = Math.min(160, Math.max(24, Math.floor(count / 40)));
+  const per = Math.ceil(count / chunks);
+
+  c.lineCap = 'round';
+  c.lineJoin = 'round';
+
+  // Two passes: a soft wide halo, then the bright line on top.
+  for (const pass of [{ w: p.width * 5, a: 0.06 }, { w: p.width, a: 0.9 }]) {
+    c.lineWidth = pass.w;
+    for (let k = 0; k < chunks; k++) {
+      const start = k * per, end = Math.min(count - 1, start + per);
+      if (end <= start) break;
+      const t = k / chunks;
+      c.strokeStyle = `hsla(${(baseHue + t * 110) % 360}, ${72 - t * 18}%, ${58 + Math.sin(t * Math.PI) * 14}%, ${pass.a})`;
+      c.beginPath();
+      c.moveTo(pts[start * 2] * scale + ox, pts[start * 2 + 1] * scale + oy);
+      for (let i = start + 1; i <= end; i++) {
+        c.lineTo(pts[i * 2] * scale + ox, pts[i * 2 + 1] * scale + oy);
+      }
+      c.stroke();
+    }
+  }
+
+  if (opts.caption) {
+    c.fillStyle = 'rgba(232,236,245,0.55)';
+    c.font = `${Math.round(H * 0.026)}px ui-sans-serif, system-ui, sans-serif`;
+    c.textAlign = 'center';
+    c.fillText(p.text, W / 2, H - pad * 0.55);
+  }
+}
+
+function render() {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = Math.round(W * dpr);
+  cv.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  draw(ctx, W, H, params());
+  for (const id of CONTROLS) $('v' + id[0].toUpperCase() + id.slice(1)).textContent = $(id).value;
+}
+
+/* --- wiring ----------------------------------------------------------- */
+
+let queued = false;
+function schedule() {
+  if (queued) return;
+  queued = true;
+  requestAnimationFrame(() => { queued = false; render(); });
+}
+
+$('text').addEventListener('input', schedule);
+for (const id of CONTROLS) $(id).addEventListener('input', schedule);
+addEventListener('resize', schedule);
+
+$('save').addEventListener('click', () => {
+  const out = document.createElement('canvas');
+  out.width = 2000; out.height = 2000;
+  draw(out.getContext('2d'), 2000, 2000, params(), { caption: true });
+  const a = document.createElement('a');
+  a.download = (params().text.slice(0, 40).replace(/[^\w -]+/g, '') || 'spirograph') + '.png';
+  a.href = out.toDataURL('image/png');
+  a.click();
+});
+
+render();
+$('text').focus();
+$('text').select();
+</script>
+</body>
+</html>

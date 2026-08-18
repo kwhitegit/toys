@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toys</title>
+<style>
+  :root {
+    --bg: #0b0d12;
+    --panel: #141821;
+    --line: #262c3a;
+    --ink: #e8ecf5;
+    --dim: #7c8598;
+    --accent: #8ea2ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.5 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+    display: flex;
+    justify-content: center;
+    padding: 8vh 24px 12vh;
+  }
+  main { width: 100%; max-width: 720px; }
+  h1 { font-size: 34px; margin: 0 0 6px; letter-spacing: -0.02em; }
+  .sub { color: var(--dim); margin: 0 0 40px; }
+  ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+  a.toy {
+    display: block;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 20px;
+    text-decoration: none;
+    color: inherit;
+    transition: border-color .15s, transform .15s;
+  }
+  a.toy:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .name { font-size: 19px; font-weight: 600; }
+  .shape { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+  .what { color: var(--dim); margin: 6px 0 0; }
+  footer { color: var(--dim); font-size: 13px; margin-top: 48px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Toys</h1>
+  <p class="sub">Things built for no reason. Click one.</p>
+
+  <ul id="list"></ul>
+
+  <footer>Everything here runs in your browser. Nothing is saved, nothing is sent anywhere.</footer>
+</main>
+
+<script>
+/* Add a toy: drop its folder in beside this file, add one line here. */
+const TOYS = [
+  {
+    path: 'spirograph/',
+    name: 'Sentence Spirograph',
+    shape: 'instrument',
+    what: 'Type a sentence. Each letter steers a pen, and the sentence draws itself as one unbroken line.',
+  },
+];
+
+document.getElementById('list').innerHTML = TOYS.map(t => `
+  <li><a class="toy" href="${t.path}">
+    <div class="row"><span class="name">${t.name}</span><span class="shape">${t.shape}</span></div>
+    <p class="what">${t.what}</p>
+  </a></li>
+`).join('');
+</script>
+</body>
+</html>
