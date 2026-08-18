@@ -1,0 +1,627 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Meeple Curling</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #14100c; }
+  body { font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+  canvas.dragging { cursor: grabbing; }
+  .hud {
+    position: fixed; left: 14px; bottom: 12px; display: flex; gap: 10px; align-items: center;
+    color: #d8cdbb; opacity: .55; user-select: none;
+  }
+  .hud button {
+    font: inherit; color: inherit; background: rgba(255,255,255,.07);
+    border: 1px solid rgba(255,255,255,.14); border-radius: 6px; padding: 3px 9px; cursor: pointer;
+  }
+  .hud button:hover { background: rgba(255,255,255,.14); }
+  .hint { position: fixed; right: 14px; bottom: 12px; color: #d8cdbb; opacity: .38; user-select: none; }
+
+  .board {
+    position: fixed; right: 14px; top: 14px; min-width: 116px; display: none;
+    padding: 9px 11px; border-radius: 8px; user-select: none;
+    background: rgba(0,0,0,.34); border: 1px solid rgba(255,255,255,.10); color: #e6dccd;
+  }
+  .board .row { display: flex; justify-content: space-between; gap: 14px; }
+  .board .end { letter-spacing: .09em; opacity: .55; font-size: 11px; }
+  .board .scenario { font-size: 11px; opacity: .45; font-style: italic; margin-bottom: 5px; }
+  .board .swatch { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
+  .board .lie { margin-top: 6px; font-size: 11px; letter-spacing: .05em; opacity: .75; }
+  .board .pips { font-size: 11px; letter-spacing: .12em; color: #c8342c; }
+  .board .pips.blue { color: #2e6fb7; }
+  .board .turn { margin-top: 5px; font-size: 11px; letter-spacing: .04em; }
+
+  .banner {
+    position: fixed; inset: 0; display: none; place-content: center; text-align: center;
+    background: rgba(10,8,6,.55); color: #f4e9d6; user-select: none;
+  }
+  .banner.show { display: grid; }
+  .banner h1 { margin: 0 0 4px; font-size: 34px; letter-spacing: .04em; font-weight: 600; }
+  .banner p { margin: 0 0 18px; opacity: .6; }
+  .banner button {
+    font: inherit; font-size: 15px; color: #14100c; background: #e6dccd;
+    border: 0; border-radius: 8px; padding: 8px 20px; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<canvas id="table"></canvas>
+<div class="hud">
+  <button id="mode">mode: free play</button>
+  <button id="aim">aim: flick forward</button>
+  <button id="rack">re-rack</button>
+  <button id="mute">sound: on</button>
+</div>
+<div class="hint" id="hint">drag a meeple the way you want it to go</div>
+
+<div class="board" id="board">
+  <div class="end" id="endno">END 1</div>
+  <div class="scenario" id="scenario">wide open</div>
+  <div class="row"><span><i class="swatch" style="background:#c8342c"></i>red</span><span id="sred">0</span></div>
+  <div class="pips" id="pips">●●●●●</div>
+  <div class="row"><span><i class="swatch" style="background:#2e6fb7"></i>blue</span><span id="sblue">0</span></div>
+  <div class="pips blue" id="pipsblue">●●●●●</div>
+  <div class="lie" id="lie">blank end</div>
+  <div class="turn" id="turn">red to throw</div>
+</div>
+
+<div class="banner" id="banner">
+  <div>
+    <h1 id="btext">RED SCORES 2</h1>
+    <p id="bsub">blue's best rock was second closest</p>
+    <button id="next">next end</button>
+  </div>
+</div>
+
+<script>
+// ---------------------------------------------------------------- config
+const FRICTION      = 0.95;  // exponential velocity decay, per second
+const FLOOR_DRAG    = 3.2;   // once it's off the felt, it gives up fast
+const RESTITUTION    = 0.93;
+const STOP_SPEED    = 5;     // px/s below which a meeple just stops
+const SUBSTEPS      = 3;
+const PULL_ROOM     = 0.14;  // full-power pull, as a fraction of sheet length. Must fit
+                             // on screen BELOW the rocks or you can never reach 100%.
+// Top speed as a multiple of sheet length per second, so the feel survives any
+// window size. 'free' is a hammer that flies off the back; 'end' is tuned so a
+// draw to the button sits near the middle of the pull, where you can find it.
+const POWER         = { free: 2.1, match: 1.15 };
+const COLORS = ['#c8342c', '#2e6fb7', '#e0a92b', '#2f8a4c', '#8a5bb8', '#d4762c', '#1c1a17', '#e6dccd'];
+const RED = '#c8342c', BLUE = '#2e6fb7';
+const ROCKS = 5;             // rocks you throw per end
+const ENDS  = 6;             // ends in a match. A tie plays extra ends until it breaks.
+const YOU   = 'blue';        // the team you throw in solo; the other one is the dealt pattern
+const HOUSE = 0.31;          // outer ring radius, as a fraction of felt width
+
+// ---------------------------------------------------------------- state
+const canvas = document.getElementById('table');
+const ctx = canvas.getContext('2d');
+const el = id => document.getElementById(id);
+let W = 0, H = 0, felt = null, R = 18;
+let meeples = [], drag = null, muted = false, maxPull = 120;
+let mode = 'free', aim = 'flick', ended = false, scenario = '';
+let left = { red: ROCKS, blue: 0 };    // rocks still in hand
+let hammer = 'red';                    // team throwing last. Real advantage, so the loser of an end gets it.
+const tally = { end: 1, red: 0, blue: 0 };
+
+const playing = () => mode !== 'free';
+const other = t => (t === 'red' ? 'blue' : 'red');
+// Whoever has more rocks left throws; level means the non-hammer team, which
+// makes the alternation fall out on its own and puts the hammer last.
+const turn = () => (left.red === left.blue ? other(hammer) : left.red > left.blue ? 'red' : 'blue');
+
+// ---------------------------------------------------------------- layout
+function layout() {
+  const prev = felt;
+  W = canvas.clientWidth; H = canvas.clientHeight;
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const h = H - 48;
+  const w = Math.min(W - 48, h * 0.68);
+  felt = { x: (W - w) / 2, y: (H - h) / 2, w, h };
+  R = Math.max(14, w * 0.042);
+  maxPull = Math.max(70, Math.min(h * PULL_ROOM, 170));
+
+  if (prev) {  // keep everyone where they were, proportionally
+    for (const m of meeples) {
+      m.x = felt.x + ((m.x - prev.x) / prev.w) * felt.w;
+      m.y = felt.y + ((m.y - prev.y) / prev.h) * felt.h;
+    }
+  }
+}
+
+const houseCenter = () => ({ x: felt.x + felt.w / 2, y: felt.y + felt.h * 0.24 });
+
+// ---------------------------------------------------------------- meeples
+function meeple(x, y, color, angle = 0, team = null) {
+  return { x, y, vx: 0, vy: 0, angle, spin: 0, color, team, thrown: false, scale: 1, alive: true, falling: false };
+}
+
+function rack() {
+  meeples = [];
+  ended = false;
+  el('banner').classList.remove('show');
+  ({ free: rackPile, solo: rackSolo, versus: rackVersus })[mode]();
+  syncHud();
+}
+
+function rackPile() {
+  const c = houseCenter(), gap = R * 2.35;
+
+  // a loose triangle sitting in the house, facing every which way
+  let i = 0;
+  for (let row = 0; row < 4; row++) {
+    for (let col = 0; col <= row; col++) {
+      const x = c.x + (col - row / 2) * gap;
+      const y = c.y - gap * 1.1 + row * gap * 0.92;
+      meeples.push(meeple(x, y, COLORS[i++ % COLORS.length], (i * 2.4) % (Math.PI * 2)));
+    }
+  }
+  stageRow(Array(ROCKS).fill(YOU));
+}
+
+// Each end deals a different situation. `house` rocks are radius bands out from
+// the button; `guards` are parked down the lane at [side offset, distance], all
+// as fractions of felt width. Everything inside a band is randomised, and the
+// whole thing mirrors at random, so no two ends deal the same.
+const SCENARIOS = [
+  { name: 'wide open',     house: [[0.20, 0.30]],
+                           guards: [] },
+  { name: 'open house',    house: [[0.02, 0.10], [0.19, 0.29]],
+                           guards: [[[-0.14, 0.14], [0.42, 0.62]]] },
+  { name: 'the wall',      house: [[0.06, 0.16], [0.18, 0.28]],
+                           guards: [[[-0.26, -0.12], [0.40, 0.52]], [[-0.06, 0.06], [0.54, 0.66]], [[0.12, 0.26], [0.68, 0.80]]] },
+  { name: 'buried button', house: [[0.00, 0.05], [0.14, 0.26]],
+                           guards: [[[-0.07, 0.07], [0.36, 0.46]], [[-0.09, 0.09], [0.54, 0.64]]] },
+  { name: 'corner freeze', house: [[0.09, 0.19], [0.15, 0.25], [0.21, 0.30]], arc: [0.5, 1.9],
+                           guards: [[[0.06, 0.24], [0.44, 0.60]]] },
+  { name: 'scattered',     house: [[0.05, 0.30], [0.05, 0.30], [0.05, 0.30], [0.05, 0.30]],
+                           guards: [[[-0.20, 0.20], [0.46, 0.70]]] },
+];
+
+const rnd = (a, b) => a + Math.random() * (b - a);
+const band = b => rnd(b[0], b[1]);
+
+// nudge a rock off anything it was dealt on top of
+function clear(x, y) {
+  for (let t = 0; t < 40 && meeples.some(m => Math.hypot(m.x - x, m.y - y) < R * 1.9); t++) {
+    x += rnd(-R, R) * 1.6; y += rnd(-R, R) * 1.6;
+  }
+  return { x, y };
+}
+
+// two players, one mouse, empty house — the actual game
+function rackVersus() {
+  const rack = [];
+  for (let k = 0; k < ROCKS; k++) rack.push('red', 'blue');
+  stageRow(rack);
+  left = { red: ROCKS, blue: ROCKS };
+  scenario = '';
+}
+
+function rackSolo() {
+  const c = houseCenter(), w = felt.w;
+  const s = SCENARIOS[Math.floor(Math.random() * SCENARIOS.length)];
+  const flip = Math.random() < 0.5 ? 1 : -1;
+  scenario = s.name;
+
+  const foe = other(YOU), foeColor = foe === 'red' ? RED : BLUE;
+  for (const b of s.house) {                       // their rocks already in the rings
+    const a = rnd(...(s.arc || [0, Math.PI * 2])), r = band(b) * w;
+    const p = clear(c.x + Math.cos(a) * r * flip, c.y + Math.sin(a) * r);
+    meeples.push(meeple(p.x, p.y, foeColor, a, foe));
+  }
+  for (const [side, down] of s.guards) {           // their rocks parked in your lane
+    const p = clear(c.x + band(side) * w * flip, c.y + band(down) * w);
+    meeples.push(meeple(p.x, p.y, foeColor, rnd(0, 6.3), foe));
+  }
+
+  stageRow(Array(ROCKS).fill(YOU));
+  left = { red: 0, blue: 0 };
+  left[YOU] = ROCKS;
+}
+
+// The rack at the near end, standing politely upright. Parked a good way up from
+// the edge so there is room on screen to pull back to full power, and all on one
+// line so nobody's rocks are sitting in front of anybody else's.
+function stageRow(teams) {
+  const y = felt.y + felt.h - Math.max(R * 2.4, maxPull * 0.9);
+  teams.forEach((t, k) => meeples.push(
+    meeple(felt.x + felt.w * (k + 1) / (teams.length + 1), y, t === 'red' ? RED : BLUE, 0, t)
+  ));
+}
+
+// ---------------------------------------------------------------- scoring
+// Real curling: only one team scores an end. Whoever has the rock closest to
+// the button scores one point per rock of theirs that beats the other team's best.
+const toButton = m => Math.hypot(m.x - houseCenter().x, m.y - houseCenter().y);
+const inHouse = m => !m.falling && toButton(m) <= felt.w * HOUSE + R * 0.78;
+const atRest = () => meeples.every(m => !m.falling && m.vx === 0 && m.vy === 0);
+
+function standing() {
+  const ranked = t => meeples.filter(m => m.team === t && inHouse(m)).map(toButton).sort((a, b) => a - b);
+  const red = ranked('red'), blue = ranked('blue');
+  const bestRed = red.length ? red[0] : Infinity;
+  const bestBlue = blue.length ? blue[0] : Infinity;
+  if (bestRed === Infinity && bestBlue === Infinity) return { team: null, points: 0 };
+  return bestRed < bestBlue
+    ? { team: 'red',  points: red.filter(d => d < bestBlue).length }
+    : { team: 'blue', points: blue.filter(d => d < bestRed).length };
+}
+
+const matchOver = () => tally.end >= ENDS && tally.red !== tally.blue;
+
+function finishEnd() {
+  ended = true;
+  const s = standing();
+  if (s.team) tally[s.team] += s.points;
+  if (mode === 'versus' && s.team) hammer = other(s.team);   // score an end, lose the hammer
+  matchOver() ? showFinal() : showEndResult(s);
+  el('banner').classList.add('show');
+  syncHud();
+}
+
+// Scoring without the hammer is a steal — that word is the whole drama of curling.
+function showEndResult(s) {
+  const steal = s.team && s.team !== hammer;
+  el('btext').textContent = s.team
+    ? `${s.team.toUpperCase()} ${steal ? 'STEALS' : 'SCORES'} ${s.points}`
+    : 'BLANK END';
+  el('bsub').textContent = !s.team ? 'nobody left a rock in the house'
+    : `${s.points} ${s.team} rock${s.points > 1 ? 's' : ''} beat ${other(s.team)}'s best`
+      + (steal ? ' — without the hammer' : '');
+  el('next').textContent = tally.end >= ENDS ? 'extra end' : 'next end';
+}
+
+function showFinal() {
+  const won = tally.red > tally.blue;
+  el('btext').textContent = `${won ? 'RED' : 'BLUE'} WINS ${Math.max(tally.red, tally.blue)}–${Math.min(tally.red, tally.blue)}`;
+  el('bsub').textContent = `after ${tally.end} ends` + (tally.end > ENDS ? ', settled in extras' : '');
+  el('next').textContent = 'play again';
+}
+
+function nextEnd() {
+  if (matchOver()) {
+    tally.end = 1; tally.red = 0; tally.blue = 0;
+    hammer = mode === 'versus' ? 'blue' : YOU;   // solo: they never throw, so you always have last rock
+  } else tally.end++;
+  rack();
+}
+
+function setMode(next) {
+  mode = next;
+  tally.end = 1; tally.red = 0; tally.blue = 0;
+  hammer = mode === 'versus' ? 'blue' : YOU;   // solo: they never throw, so you always have last rock   // solo: blue never throws, so red always has last rock
+  rack();
+}
+
+const nextMode = () => ({ free: 'solo', solo: 'versus', versus: 'free' })[mode];
+
+// ---------------------------------------------------------------- physics
+function step(dt) {
+  const sub = dt / SUBSTEPS;
+  for (let s = 0; s < SUBSTEPS; s++) {
+    for (const m of meeples) {
+      if (!m.alive) continue;
+      const decay = Math.exp(-(m.falling ? FLOOR_DRAG : FRICTION) * sub);
+      m.vx *= decay; m.vy *= decay; m.spin *= decay;
+      m.x += m.vx * sub; m.y += m.vy * sub; m.angle += m.spin * sub;
+      if (!m.falling && Math.hypot(m.vx, m.vy) < STOP_SPEED) { m.vx = 0; m.vy = 0; }
+    }
+    collide(sub);
+  }
+
+  for (const m of meeples) {
+    if (!m.alive) continue;
+    if (!m.falling && offFelt(m)) { m.falling = true; m.spin += (Math.random() - 0.5) * 9; thud(); }
+    if (m.falling) { m.scale -= dt * 1.7; if (m.scale <= 0) m.alive = false; }
+  }
+  meeples = meeples.filter(m => m.alive);
+
+  if (playing() && !ended && left.red + left.blue === 0 && atRest()) finishEnd();
+}
+
+function offFelt(m) {
+  const p = R * 0.25;
+  return m.x < felt.x - p || m.x > felt.x + felt.w + p || m.y < felt.y - p || m.y > felt.y + felt.h + p;
+}
+
+function collide(dt) {
+  const rad = R * 0.78, min = rad * 2;
+  for (let i = 0; i < meeples.length; i++) {
+    const a = meeples[i];
+    if (a.falling) continue;
+    for (let j = i + 1; j < meeples.length; j++) {
+      const b = meeples[j];
+      if (b.falling) continue;
+      let dx = b.x - a.x, dy = b.y - a.y;
+      let d = Math.hypot(dx, dy);
+      if (d === 0) { dx = 0.01; d = 0.01; }
+      if (d >= min) continue;
+
+      const nx = dx / d, ny = dy / d;
+      const push = (min - d) / 2 + 0.01;
+      a.x -= nx * push; a.y -= ny * push; b.x += nx * push; b.y += ny * push;
+
+      const rvx = b.vx - a.vx, rvy = b.vy - a.vy;
+      const along = rvx * nx + rvy * ny;
+      if (along > 0) continue;                       // already separating
+      const imp = -(1 + RESTITUTION) * along / 2;
+      a.vx -= imp * nx; a.vy -= imp * ny;
+      b.vx += imp * nx; b.vy += imp * ny;
+
+      const tang = rvx * -ny + rvy * nx;             // scrape imparts spin
+      a.spin -= tang * 0.012; b.spin += tang * 0.012;
+      knock(Math.min(0.5, Math.abs(along) / 900), 340 + Math.random() * 260);
+    }
+  }
+}
+
+// ---------------------------------------------------------------- drawing
+function meeplePath(r) {
+  ctx.beginPath();
+  ctx.moveTo(-0.30 * r, -0.10 * r);
+  ctx.quadraticCurveTo(-0.58 * r, -0.04 * r, -0.92 * r, 0.28 * r);
+  ctx.quadraticCurveTo(-1.00 * r,  0.44 * r, -0.80 * r, 0.44 * r);
+  ctx.quadraticCurveTo(-0.56 * r,  0.32 * r, -0.42 * r, 0.38 * r);
+  ctx.lineTo(-0.72 * r, 0.92 * r);
+  ctx.quadraticCurveTo(-0.60 * r, 1.03 * r, -0.42 * r, 0.96 * r);
+  ctx.quadraticCurveTo(-0.16 * r, 0.86 * r,  0.00 * r, 0.52 * r);
+  ctx.quadraticCurveTo( 0.16 * r, 0.86 * r,  0.42 * r, 0.96 * r);
+  ctx.quadraticCurveTo( 0.60 * r, 1.03 * r,  0.72 * r, 0.92 * r);
+  ctx.lineTo(0.42 * r, 0.38 * r);
+  ctx.quadraticCurveTo( 0.56 * r, 0.32 * r,  0.80 * r, 0.44 * r);
+  ctx.quadraticCurveTo( 1.00 * r, 0.44 * r,  0.92 * r, 0.28 * r);
+  ctx.quadraticCurveTo( 0.58 * r,-0.04 * r,  0.30 * r,-0.10 * r);
+  ctx.closePath();
+  ctx.moveTo(0.42 * r, -0.46 * r);
+  ctx.arc(0, -0.46 * r, 0.42 * r, 0, Math.PI * 2);
+}
+
+function drawTable() {
+  ctx.fillStyle = '#14100c';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 26; ctx.shadowOffsetY = 8;
+  const g = ctx.createLinearGradient(0, felt.y, 0, felt.y + felt.h);
+  g.addColorStop(0, '#2f5f43'); g.addColorStop(0.5, '#27523a'); g.addColorStop(1, '#1f452f');
+  ctx.fillStyle = g;
+  ctx.fillRect(felt.x, felt.y, felt.w, felt.h);
+  ctx.restore();
+
+  const c = houseCenter(), w = felt.w;
+  const rings = [[0.31, '#3a6ea8'], [0.22, '#d8d2c4'], [0.13, '#a8402f'], [0.05, '#d8d2c4']];
+  ctx.save();
+  ctx.globalAlpha = 0.28;
+  for (const [f, col] of rings) {
+    ctx.beginPath(); ctx.arc(c.x, c.y, w * f, 0, Math.PI * 2);
+    ctx.fillStyle = col; ctx.fill();
+  }
+  ctx.restore();
+
+  ctx.strokeStyle = 'rgba(255,255,255,.10)'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(felt.x, c.y); ctx.lineTo(felt.x + felt.w, c.y);
+  ctx.moveTo(felt.x, felt.y + felt.h * 0.62); ctx.lineTo(felt.x + felt.w, felt.y + felt.h * 0.62);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.lineWidth = 2;
+  ctx.strokeRect(felt.x, felt.y, felt.w, felt.h);
+}
+
+function drawMeeple(m) {
+  const s = R * m.scale;
+  if (s <= 0) return;
+  const waiting = mode === 'versus' && !m.thrown && m.team !== turn();
+  ctx.save();
+  ctx.translate(m.x, m.y);
+  ctx.globalAlpha = m.falling ? Math.max(0, m.scale) : waiting ? 0.4 : 1;
+
+  ctx.save();                                   // shadow puddle
+  ctx.translate(2.5, 4);
+  ctx.rotate(m.angle);
+  ctx.fillStyle = 'rgba(0,0,0,.35)';
+  ctx.filter = 'blur(2px)';
+  meeplePath(s); ctx.fill();
+  ctx.restore();
+
+  ctx.rotate(m.angle);
+  ctx.fillStyle = m.color;
+  meeplePath(s); ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,.28)'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.beginPath();                              // a little gloss so it reads as wood
+  ctx.ellipse(-0.22 * s, -0.5 * s, 0.16 * s, 0.1 * s, -0.6, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,.22)'; ctx.fill();
+  ctx.restore();
+}
+
+// 'pull' = drag away from the target and let the sling go. 'flick' = drag the way
+// you want it to travel. Same maths, opposite sign.
+function launchVec() {
+  const m = drag.m;
+  const dx = aim === 'flick' ? drag.x - m.x : m.x - drag.x;
+  const dy = aim === 'flick' ? drag.y - m.y : m.y - drag.y;
+  return { dx, dy, len: Math.hypot(dx, dy) };
+}
+
+function drawAim() {
+  if (!drag) return;
+  const m = drag.m;
+  const v = launchVec();
+  const power = Math.min(v.len, maxPull) / maxPull;
+  const ang = Math.atan2(v.dy, v.dx);
+  const full = power > 0.995;
+
+  ctx.save();
+  ctx.setLineDash([5, 6]);
+  ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(m.x, m.y); ctx.lineTo(drag.x, drag.y); ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.beginPath();                              // power ring: closed circle = maxed out
+  ctx.arc(m.x, m.y, R * 1.45, -Math.PI / 2, -Math.PI / 2 + power * Math.PI * 2);
+  ctx.strokeStyle = full ? '#ffd166' : 'rgba(244,233,214,.7)';
+  ctx.lineWidth = full ? 4 : 3; ctx.stroke();
+
+  ctx.globalAlpha = 0.25 + power * 0.55;
+  ctx.strokeStyle = full ? '#ffd166' : '#f4e9d6'; ctx.lineWidth = 3;
+  const tipX = m.x + Math.cos(ang) * (R + 14 + power * 90);
+  const tipY = m.y + Math.sin(ang) * (R + 14 + power * 90);
+  ctx.beginPath(); ctx.moveTo(m.x + Math.cos(ang) * R, m.y + Math.sin(ang) * R);
+  ctx.lineTo(tipX, tipY); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(tipX + Math.cos(ang + 2.5) * 12, tipY + Math.sin(ang + 2.5) * 12);
+  ctx.lineTo(tipX + Math.cos(ang - 2.5) * 12, tipY + Math.sin(ang - 2.5) * 12);
+  ctx.closePath(); ctx.fillStyle = full ? '#ffd166' : '#f4e9d6'; ctx.fill();
+  ctx.restore();
+}
+
+// the TV measuring line: which rock is currently sitting shot
+function drawShot() {
+  if (!playing()) return;
+  const c = houseCenter();
+  const shot = meeples.filter(inHouse).sort((a, b) => toButton(a) - toButton(b))[0];
+  if (!shot) return;
+  ctx.save();
+  ctx.setLineDash([4, 5]);
+  ctx.strokeStyle = 'rgba(255,255,255,.30)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(shot.x, shot.y); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.beginPath(); ctx.arc(shot.x, shot.y, R * 1.2, 0, Math.PI * 2);
+  ctx.strokeStyle = shot.team === 'red' ? 'rgba(255,150,140,.9)' : 'rgba(150,190,255,.9)';
+  ctx.lineWidth = 2; ctx.stroke();
+  ctx.restore();
+}
+
+function render() {
+  drawTable();
+  drawShot();
+  for (const m of meeples) if (!m.falling) drawMeeple(m);
+  for (const m of meeples) if (m.falling) drawMeeple(m);
+  drawAim();
+}
+
+// ---------------------------------------------------------------- sound
+let ac = null;
+function audio() {
+  if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
+  if (ac.state === 'suspended') ac.resume();
+  return ac;
+}
+function burst(vol, pitch, q, decay) {
+  if (muted || !ac) return;
+  const t = ac.currentTime, len = Math.floor(ac.sampleRate * 0.08);
+  const buf = ac.createBuffer(1, len, ac.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 5);
+  const src = ac.createBufferSource(); src.buffer = buf;
+  const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = pitch; bp.Q.value = q;
+  const g = ac.createGain();
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.0008, t + decay);
+  src.connect(bp).connect(g).connect(ac.destination);
+  src.start(t);
+}
+const knock = (vol, pitch) => burst(vol, pitch, 3.5, 0.11);
+const thud  = ()           => burst(0.28, 110, 1.4, 0.22);
+
+// ---------------------------------------------------------------- input
+const pos = e => { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+// Free play: anything on the table. In a match: only the throwing team's unthrown
+// rocks, and in two-player you must wait for the ice to clear before your turn.
+const throwable = m =>
+  !playing() || (m.team === turn() && !m.thrown && !ended && (mode !== 'versus' || atRest()));
+const grab = p => meeples.find(m => !m.falling && throwable(m) && Math.hypot(m.x - p.x, m.y - p.y) < R * 1.1);
+
+canvas.addEventListener('pointerdown', e => {
+  audio();
+  const p = pos(e), m = grab(p);
+  if (!m) return;
+  m.vx = 0; m.vy = 0;                       // catching it is allowed
+  drag = { m, x: p.x, y: p.y };
+  canvas.setPointerCapture(e.pointerId);
+  canvas.classList.add('dragging');
+});
+
+canvas.addEventListener('pointermove', e => { if (drag) { const p = pos(e); drag.x = p.x; drag.y = p.y; } });
+
+canvas.addEventListener('pointerup', () => {
+  if (!drag) return;
+  const m = drag.m;
+  const { dx, dy, len } = launchVec();
+  if (len > 6) {
+    const speed = (Math.min(len, maxPull) / maxPull) * felt.h * POWER[playing() ? 'match' : 'free'];
+    m.vx = (dx / len) * speed; m.vy = (dy / len) * speed;
+    m.angle = Math.atan2(dy, dx) + Math.PI / 2;
+    knock(0.22, 520);
+    if (playing() && !m.thrown) { m.thrown = true; left[m.team]--; }
+  }
+  drag = null;
+  canvas.classList.remove('dragging');
+});
+
+addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (k === 'r') rack();
+  if (k === 'm') toggleMute();
+  if (k === 'e') setMode(nextMode());
+  if (k === 'a') toggleAim();
+  if (k === ' ' && ended) { e.preventDefault(); nextEnd(); }
+});
+el('aim').onclick = toggleAim;
+function toggleAim() { aim = aim === 'pull' ? 'flick' : 'pull'; syncHud(); }
+el('rack').onclick = rack;
+el('mute').onclick = toggleMute;
+el('next').onclick = nextEnd;
+el('mode').onclick = () => setMode(nextMode());
+function toggleMute() {
+  muted = !muted;
+  el('mute').textContent = 'sound: ' + (muted ? 'off' : 'on');
+}
+addEventListener('resize', layout);
+
+// ---------------------------------------------------------------- hud
+function syncHud() {
+  const two = mode === 'versus';
+  el('mode').textContent = 'mode: ' + ({ free: 'free play', solo: 'solo match', versus: '2-player' })[mode];
+  el('aim').textContent = 'aim: ' + (aim === 'flick' ? 'flick forward' : 'pull back');
+  el('hint').textContent = !playing() ? (aim === 'flick' ? 'drag a meeple the way you want it to go' : 'drag a meeple, pull back, let go')
+    : two ? 'take turns on the one mouse · dimmed rocks are waiting their turn'
+          : `land a ${YOU} rock nearer the button than ${other(YOU)}'s best`;
+  el('board').style.display = playing() ? 'block' : 'none';
+  if (!playing()) return;
+
+  const s = standing();
+  el('endno').textContent = tally.end > ENDS ? 'EXTRA END' : `END ${tally.end} / ${ENDS}`;
+  el('scenario').textContent = scenario;
+  el('sred').textContent = tally.red;
+  el('sblue').textContent = tally.blue;
+  el('lie').textContent = s.team ? `${s.team} lies ${s.points}` : 'nobody in the house';
+  el('pips').textContent     = two || YOU === 'red'  ? pips(left.red)  : '';
+  el('pipsblue').textContent = two || YOU === 'blue' ? pips(left.blue) : '';
+  el('turn').textContent = ended ? '' : two ? `${turn()} to throw · ${hammer} has hammer` : '';
+  el('turn').style.color = turn() === 'red' ? '#e8897f' : '#8fb6e8';
+}
+
+const pips = n => '●'.repeat(n) + '○'.repeat(ROCKS - n);
+
+// ---------------------------------------------------------------- loop
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 1 / 30);
+  last = now;
+  step(dt);
+  render();
+  if (playing()) syncHud();          // "red lies 2" should be live, not end-of-end news
+  requestAnimationFrame(frame);
+}
+layout(); rack(); requestAnimationFrame(frame);
+</script>
+</body>
+</html>
