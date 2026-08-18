@@ -32,17 +32,51 @@
 
   /* --- the wall ----------------------------------------------------- */
 
-  #wall {
-    perspective: 1400px;
+  /* --- the carcass -------------------------------------------------- */
+
+  .cabinet {
+    position: relative;
     align-self: center;
     justify-self: center;
-    width: min(92vw, 880px);
+    margin: 46px 0 40px;
+    padding: 14px;
+    border-radius: 5px;
+    background:
+      repeating-linear-gradient(91deg, rgba(0,0,0,.13) 0 3px, rgba(255,255,255,.02) 3px 7px),
+      linear-gradient(158deg, #6d4626, #4b2e18 58%, #3a2312);
+    box-shadow:
+      0 34px 70px rgba(0,0,0,.62),
+      inset 0 0 0 2px rgba(0,0,0,.38),
+      inset 0 2px 0 rgba(255,255,255,.08);
+  }
+  /* cornice */
+  .cabinet::before {
+    content: '';
+    position: absolute;
+    left: -11px; right: -11px; top: -17px;
+    height: 17px;
+    border-radius: 4px 4px 2px 2px;
+    background: linear-gradient(180deg, #8a5a34, #5e3a1f 70%, #3d2614);
+    box-shadow: 0 5px 12px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.14);
+  }
+  /* plinth */
+  .cabinet::after {
+    content: '';
+    position: absolute;
+    left: -6px; right: -6px; bottom: -14px;
+    height: 14px;
+    border-radius: 2px 2px 4px 4px;
+    background: linear-gradient(180deg, #5e3a1f, #34200f);
+    box-shadow: 0 8px 18px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.08);
+  }
+
+  #wall {
+    /* flatter perspective: open doors stay near their own hinge line
+       instead of fanning across the compartment beside them */
+    perspective: 2400px;
+    width: min(88vw, 850px);
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(94px, 1fr));
-    grid-auto-rows: 94px;
-    grid-auto-flow: dense;
-    gap: 9px;
-    padding: 18px 4px;
+    gap: 7px;
   }
 
   .door {
@@ -69,6 +103,7 @@
     gap: 3px;
     padding: 6px;
     overflow: hidden;
+    transition: padding .42s cubic-bezier(.2,.72,.24,1);
   }
   .find {
     font-size: clamp(22px, 5vw, 34px);
@@ -79,7 +114,8 @@
     font: italic 11px/1.25 Georgia, "Times New Roman", serif;
     color: var(--dim);
     text-align: center;
-    max-width: 15ch;
+    max-width: 100%;      /* the compartment decides, never a ch count */
+    overflow-wrap: break-word;
   }
   .door.wide .cap { max-width: 30ch; }
 
@@ -98,10 +134,17 @@
     place-items: center;
   }
   .door.hinge-right .panel { transform-origin: right center; }
-  .door.open .panel { transform: rotateY(-114deg); }
-  .door.open.hinge-right .panel { transform: rotateY(114deg); }
-  /* a swung door shows its blank back, and stops shadowing its neighbour */
-  .door.open .panel { pointer-events: none; }
+  /* 83deg, not past-flat: the door reads as open while sitting nearly
+     edge-on, so very little of the opening stays covered. */
+  .door.open .panel { transform: rotateY(-83deg); }
+  .door.open.hinge-right .panel { transform: rotateY(83deg); }
+  /* and the contents shift clear of the hinge, so nothing is read
+     through a door that happens to be standing in front of it */
+  .door.open:not(.hinge-right) .inside { padding-left: 13px; }
+  .door.open.hinge-right .inside { padding-right: 13px; }
+  /* an open door is in front of the cabinet face, never behind it */
+  .door.open, .door.closing { z-index: 5; }
+  .door.open .panel { pointer-events: none; box-shadow: 0 0 22px rgba(0,0,0,.55); }
   .door.open .num, .door.open .knob { opacity: 0; }
   .door:hover .panel { filter: brightness(1.08); }
   .door:focus-visible .panel { outline: 2px solid var(--brass); outline-offset: 2px; }
@@ -126,6 +169,41 @@
     transition: opacity .28s;
   }
   .door.hinge-right .knob { right: auto; left: 7px; }
+
+  /* --- open shelves, for the compartments without doors ------------- */
+
+  .shelf {
+    position: absolute;
+    inset: 0;
+    border-radius: 4px;
+    background: linear-gradient(180deg, #17100a, var(--recess));
+    box-shadow: inset 0 3px 14px #000, inset 0 0 0 1px #2b1d12;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .board {
+    flex: 1;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 2px;
+    padding: 0 6px 4px;
+    border-bottom: 3px solid #55351c;
+    box-shadow: 0 1px 0 rgba(0,0,0,.6);
+  }
+  .board:last-child { border-bottom: 0; padding-bottom: 6px; }
+  .spine {
+    width: 5px;
+    border-radius: 1px 1px 0 0;
+    box-shadow: inset -1px 0 0 rgba(0,0,0,.45), inset 1px 0 0 rgba(255,255,255,.08);
+  }
+  .spine.lean { transform: rotate(9deg); transform-origin: bottom right; }
+  .knick {
+    font-size: 15px;
+    line-height: 1;
+    filter: drop-shadow(0 1px 2px #000) brightness(.92);
+  }
 
   .door.stuck .panel { animation: jiggle .34s; }
   @keyframes jiggle {
@@ -184,7 +262,7 @@
 </head>
 <body>
 
-<div id="wall"></div>
+<div class="cabinet"><div id="wall"></div></div>
 <div id="banner"></div>
 
 <footer>
@@ -347,13 +425,21 @@ const FX = (() => {
 
 const wall = document.getElementById('wall');
 const banner = document.getElementById('banner');
-const DOOR_COUNT = 30;
+
 const SHAPES = [
-  { c: 1, r: 1, w: 68 },
-  { c: 2, r: 1, w: 15 },
-  { c: 1, r: 2, w: 10 },
-  { c: 2, r: 2, w: 7 },
+  { c: 1, r: 1, w: 56 },
+  { c: 2, r: 1, w: 18 },
+  { c: 1, r: 2, w: 14 },
+  { c: 2, r: 2, w: 12 },
 ];
+
+/* things that sit on the open shelves */
+const KNICKS = ['🕯️','🧭','🐚','🫖','🪆','🔮','🧸','🪵','🥃','🧿','🪴','📯',
+                '🕰️','⚓','🐦','🎣','🪈','🗿','🔔','🪙','🧴','🪶'];
+const SPINES = ['#8c3b2e','#3c5a6e','#6b5b2e','#4a3b5c','#2f4f3a','#7a4a2a','#575149','#7b3d52'];
+
+let cols = 0, rows = 0, doorCount = 0, zTop = 5;
+const doors = () => [...wall.querySelectorAll('.door')];
 
 const recent = [];
 const rand = n => Math.floor(Math.random() * n);
@@ -373,22 +459,100 @@ function pickFind() {
   return FINDS[i];
 }
 
-function buildWall() {
-  wall.innerHTML = '';
-  const numbers = shuffled([...Array(DOOR_COUNT).keys()].map(n => n + 1));
-  for (let i = 0; i < DOOR_COUNT; i++) {
-    const shape = weighted(SHAPES);
-    const door = document.createElement('button');
-    door.className = 'door' + (chance(.5) ? ' hinge-right' : '') + (shape.c > 1 ? ' wide' : '');
-    door.style.gridColumn = `span ${shape.c}`;
-    door.style.gridRow = `span ${shape.r}`;
-    door.setAttribute('aria-label', `door ${numbers[i]}`);
-    door.innerHTML =
-      `<span class="inside"><span class="find"></span><span class="cap"></span></span>` +
-      `<span class="panel"><span class="num">${numbers[i]}</span><span class="knob"></span></span>`;
-    door.addEventListener('click', () => toggleDoor(door));
-    wall.appendChild(door);
+/* Fill the rectangle exactly: walk it in reading order and drop the
+   largest shape that still fits at each empty cell. 1x1 always fits, so
+   every cell ends up covered and the cabinet has no holes in it. */
+function packRect() {
+  const taken = Array.from({ length: rows }, () => Array(cols).fill(false));
+  const blocks = [];
+  const fits = (r, c, w, h) => {
+    if (r + h > rows || c + w > cols) return false;
+    for (let y = r; y < r + h; y++)
+      for (let x = c; x < c + w; x++) if (taken[y][x]) return false;
+    return true;
+  };
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (taken[r][c]) continue;
+      const shape = weighted(SHAPES.filter(s => fits(r, c, s.c, s.r)));
+      for (let y = r; y < r + shape.r; y++)
+        for (let x = c; x < c + shape.c; x++) taken[y][x] = true;
+      blocks.push({ r, c, w: shape.c, h: shape.r });
+    }
   }
+  return blocks;
+}
+
+function buildWall() {
+  cols = Math.max(4, Math.min(9, Math.floor(wall.clientWidth / 104)));
+  rows = cols >= 7 ? 5 : 6;
+  wall.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+  wall.style.gridTemplateRows = `repeat(${rows}, 92px)`;
+  wall.innerHTML = '';
+
+  const blocks = packRect();
+  // roughly a quarter are open shelves, weighted toward the big
+  // compartments because a wide shelf of books is worth looking at
+  const shelves = blocks.map(b => chance(b.w * b.h > 1 ? .36 : .19));
+  if (!shelves.includes(true)) shelves[rand(shelves.length)] = true;
+
+  doorCount = shelves.filter(s => !s).length;
+  const numbers = shuffled([...Array(doorCount).keys()].map(n => n + 1));
+  let n = 0;
+
+  blocks.forEach((b, i) => {
+    const cell = shelves[i] ? makeShelf(b) : makeDoor(b, numbers[n++]);
+    cell.style.gridColumn = `${b.c + 1} / span ${b.w}`;
+    cell.style.gridRow = `${b.r + 1} / span ${b.h}`;
+    wall.appendChild(cell);
+  });
+}
+
+function makeDoor(b, num) {
+  const door = document.createElement('button');
+  door.className = 'door' + (chance(.5) ? ' hinge-right' : '') + (b.w > 1 ? ' wide' : '');
+  door.setAttribute('aria-label', `door ${num}`);
+  door.innerHTML =
+    `<span class="inside"><span class="find"></span><span class="cap"></span></span>` +
+    `<span class="panel"><span class="num">${num}</span><span class="knob"></span></span>`;
+  door.addEventListener('click', () => toggleDoor(door));
+  return door;
+}
+
+function makeShelf(b) {
+  const shelf = document.createElement('div');
+  shelf.className = 'shelf';
+  for (let i = 0; i < b.h; i++) shelf.appendChild(makeBoard(b.w));
+  return shelf;
+}
+
+function makeBoard(w) {
+  const board = document.createElement('div');
+  board.className = 'board';
+  const slots = w > 1 ? 2 + rand(2) : 2;
+  for (let i = 0; i < slots; i++) board.appendChild(chance(.55) ? makeBooks(w) : makeKnick());
+  return board;
+}
+
+function makeBooks(w) {
+  const group = document.createElement('span');
+  group.style.cssText = 'display:flex;align-items:flex-end;gap:1px';
+  const n = 2 + rand(w > 1 ? 4 : 3);
+  for (let i = 0; i < n; i++) {
+    const spine = document.createElement('span');
+    spine.className = 'spine' + (i === n - 1 && chance(.28) ? ' lean' : '');
+    spine.style.height = 26 + rand(28) + 'px';
+    spine.style.background = SPINES[rand(SPINES.length)];
+    group.appendChild(spine);
+  }
+  return group;
+}
+
+function makeKnick() {
+  const k = document.createElement('span');
+  k.className = 'knick';
+  k.textContent = KNICKS[rand(KNICKS.length)];
+  return k;
 }
 
 function shuffled(a) {
@@ -413,13 +577,26 @@ function fill(door, find) {
 function openDoor(door, quiet) {
   if (door.classList.contains('open')) return;
   fill(door, pickFind());
+  door.style.zIndex = ++zTop;   // newest door swings in front of the rest
   door.classList.add('open');
   openedSinceShuffle++;
   if (!quiet) FX.creak();
 }
 
-function closeDoor(door) {
+/* Hold the raised z-index until the closing swing finishes, or the door
+   would drop behind its neighbour halfway through shutting. */
+function shut(door) {
+  if (!door.classList.contains('open')) return;
   door.classList.remove('open');
+  door.classList.add('closing');
+  setTimeout(() => {
+    door.classList.remove('closing');
+    door.style.zIndex = '';
+  }, 620);
+}
+
+function closeDoor(door) {
+  shut(door);
   FX.latch();
   maybeShuffle();
 }
@@ -441,8 +618,8 @@ function toggleDoor(door) {
   if (chance(.006)) return sneeze();
   if (chance(.03)) return escape(door);
   if (chance(.05)) {
-    const shut = [...wall.children].filter(d => !d.classList.contains('open'));
-    if (shut.length) setTimeout(() => openDoor(shut[rand(shut.length)]), 190);
+    const closed = doors().filter(d => !d.classList.contains('open'));
+    if (closed.length) setTimeout(() => openDoor(closed[rand(closed.length)]), 190);
   }
 }
 
@@ -465,9 +642,9 @@ function escape(door) {
 function sneeze() {
   say('THE CABINET SNEEZED');
   FX.whoosh();
-  [...wall.children].forEach((d, i) => setTimeout(() => openDoor(d, true), i * 12));
+  doors().forEach((d, i) => setTimeout(() => openDoor(d, true), i * 12));
   setTimeout(() => {
-    [...wall.children].forEach(d => d.classList.remove('open'));
+    doors().forEach(shut);
     FX.latch();
     maybeShuffle();
   }, 1500);
@@ -485,7 +662,7 @@ function maybeShuffle() {
   setTimeout(() => {
     if (wall.querySelector('.open') || openedSinceShuffle === 0) return;
     openedSinceShuffle = 0;
-    const nums = shuffled([...Array(DOOR_COUNT).keys()].map(n => n + 1));
+    const nums = shuffled([...Array(doorCount).keys()].map(n => n + 1));
     const labels = [...wall.querySelectorAll('.num')];
     labels.forEach(n => n.classList.add('fading'));
     setTimeout(() => {
@@ -510,6 +687,17 @@ document.getElementById('sound').addEventListener('click', e => {
 document.getElementById('rebuild').addEventListener('click', () => {
   buildWall();
   openedSinceShuffle = 0;
+});
+
+/* Only rebuild on resize when the column count actually changes, so
+   dragging a window edge does not reshuffle the wall constantly. */
+let resizeTimer;
+addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    const want = Math.max(4, Math.min(9, Math.floor(wall.clientWidth / 104)));
+    if (want !== cols) buildWall();
+  }, 250);
 });
 
 buildWall();
