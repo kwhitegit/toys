@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cabinet of Tiny Doors</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='7' y='3' width='18' height='26' rx='2' fill='%23a8703f'/><rect x='9.5' y='5.5' width='13' height='21' rx='1.5' fill='none' stroke='%236b4423' stroke-width='1.5'/><circle cx='20' cy='16' r='1.7' fill='%23e8c37a'/></svg>">
+<style>
+  :root {
+    --room: #17120e;
+    --wood: #8a5a34;
+    --wood-dark: #5e3a1f;
+    --wood-light: #a8703f;
+    --brass: #e8c37a;
+    --recess: #120d09;
+    --ink: #f0e6d8;
+    --dim: #9b8a76;
+  }
+  * { box-sizing: border-box; }
+  html { height: 100%; }
+  body {
+    margin: 0;
+    min-height: 100%;
+    background: radial-gradient(ellipse at 50% 0%, #241a12 0%, var(--room) 60%);
+    background-attachment: fixed;
+    color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+    display: grid;
+    grid-template-rows: 1fr auto;
+    overflow-x: hidden;
+  }
+
+  /* --- the wall ----------------------------------------------------- */
+
+  #wall {
+    perspective: 1400px;
+    align-self: center;
+    justify-self: center;
+    width: min(92vw, 880px);
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(94px, 1fr));
+    grid-auto-rows: 94px;
+    grid-auto-flow: dense;
+    gap: 9px;
+    padding: 18px 4px;
+  }
+
+  .door {
+    position: relative;
+    transform-style: preserve-3d;
+    border: 0;
+    padding: 0;
+    background: none;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+  }
+
+  /* what the door hides */
+  .inside {
+    position: absolute;
+    inset: 0;
+    border-radius: 4px;
+    background: var(--recess);
+    box-shadow: inset 0 3px 12px #000, inset 0 0 0 1px #2b1d12;
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 3px;
+    padding: 6px;
+    overflow: hidden;
+  }
+  .find {
+    font-size: clamp(22px, 5vw, 34px);
+    line-height: 1;
+    filter: drop-shadow(0 2px 5px #000);
+  }
+  .cap {
+    font: italic 11px/1.25 Georgia, "Times New Roman", serif;
+    color: var(--dim);
+    text-align: center;
+    max-width: 15ch;
+  }
+  .door.wide .cap { max-width: 30ch; }
+
+  /* the swinging panel */
+  .panel {
+    position: absolute;
+    inset: 0;
+    border-radius: 4px;
+    transform-origin: left center;
+    transition: transform .58s cubic-bezier(.2,.72,.24,1);
+    background:
+      repeating-linear-gradient(96deg, rgba(0,0,0,.11) 0 2px, rgba(255,255,255,.03) 2px 5px),
+      linear-gradient(150deg, var(--wood-light), var(--wood) 45%, var(--wood-dark));
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,.4), inset 2px 2px 0 rgba(255,255,255,.09), 0 4px 10px rgba(0,0,0,.5);
+    display: grid;
+    place-items: center;
+  }
+  .door.hinge-right .panel { transform-origin: right center; }
+  .door.open .panel { transform: rotateY(-114deg); }
+  .door.open.hinge-right .panel { transform: rotateY(114deg); }
+  /* a swung door shows its blank back, and stops shadowing its neighbour */
+  .door.open .panel { pointer-events: none; }
+  .door.open .num, .door.open .knob { opacity: 0; }
+  .door:hover .panel { filter: brightness(1.08); }
+  .door:focus-visible .panel { outline: 2px solid var(--brass); outline-offset: 2px; }
+
+  .num {
+    font: 600 15px/1 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    color: var(--brass);
+    text-shadow: 0 1px 0 rgba(0,0,0,.6);
+    opacity: .85;
+    transition: opacity .28s;
+  }
+  .num.fading { opacity: 0; }
+  .knob {
+    position: absolute;
+    right: 7px;
+    top: 50%;
+    width: 7px;
+    height: 7px;
+    margin-top: -3.5px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #ffe9b6, var(--brass) 55%, #8a6a2c);
+    transition: opacity .28s;
+  }
+  .door.hinge-right .knob { right: auto; left: 7px; }
+
+  .door.stuck .panel { animation: jiggle .34s; }
+  @keyframes jiggle {
+    0%,100% { transform: rotateY(0); }
+    30% { transform: rotateY(-7deg); }
+    65% { transform: rotateY(-2deg); }
+  }
+
+  /* something that gets away */
+  .runner {
+    position: fixed;
+    font-size: 30px;
+    z-index: 20;
+    pointer-events: none;
+    animation: scamper 1.9s cubic-bezier(.35,0,.7,1) forwards;
+  }
+  @keyframes scamper {
+    0%   { transform: translate(0,0) rotate(0); opacity: 1; }
+    100% { transform: translate(78vw, -22vh) rotate(38deg); opacity: 0; }
+  }
+
+  #banner {
+    position: fixed;
+    inset: 0 0 auto 0;
+    top: 22px;
+    text-align: center;
+    font: 600 13px/1 ui-monospace, Consolas, monospace;
+    letter-spacing: .22em;
+    color: var(--brass);
+    opacity: 0;
+    transition: opacity .3s;
+    pointer-events: none;
+  }
+  #banner.show { opacity: 1; }
+
+  /* --- controls ----------------------------------------------------- */
+
+  footer {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 12px 16px;
+  }
+  button.pill {
+    background: rgba(255,255,255,.06);
+    border: 1px solid rgba(255,255,255,.1);
+    color: var(--dim);
+    border-radius: 999px;
+    padding: 6px 13px;
+    font: 12px/1 ui-sans-serif, system-ui, sans-serif;
+    cursor: pointer;
+  }
+  button.pill:hover { color: var(--ink); border-color: rgba(255,255,255,.22); }
+  .hint { margin-left: auto; color: #6d5f4f; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<div id="wall"></div>
+<div id="banner"></div>
+
+<footer>
+  <button class="pill" id="sound">sound: on</button>
+  <button class="pill" id="rebuild">new cabinet</button>
+  <span class="hint">open a door</span>
+</footer>
+
+<script>
+/* ===================================================================
+   What is behind the doors.  "emoji|what it is"
+   =================================================================== */
+
+const FINDS = `
+🎲|a d6 that has only ever rolled four
+🧙|a meeple who has read the rulebook and has notes
+📕|an errata slip for a game you do not own
+🌾|one wheat. always one wheat.
+⏳|the sand timer everyone agrees to ignore
+🎯|a first player marker, still warm
+🃏|a card reading CONSULT THE APPENDIX
+🐑|a sheep offering three for one, sincerely
+🏰|a castle built entirely out of upkeep phases
+🎪|the expansion nobody asked for, thriving
+🧱|a resource you can neither spend nor discard
+🛍️|the little plastic bag no one can reopen
+🧅|an onion, already chopped, no explanation given
+⏱️|nineteen minutes. exactly nineteen.
+🥄|a spoon that insists it is a fork
+🍳|a pan that preheated itself out of politeness
+🧄|garlic, pre-peeled, faintly smug
+🧊|an ice cube from a much older freezer
+🥫|a jar labeled LATER
+🍋|half a lemon, still optimistic
+🫕|a recipe using the word "simply", lying
+🧂|salt, to taste, judgmentally
+📎|a paperclip holding nothing together, proudly
+🔁|a loop that terminated years ago, still coiled
+🧭|a compass pointing at whatever you decided last
+🪜|a ladder whose top rung is labeled LATER
+🚦|a green light nobody is using
+🧵|a thread. you were going to pull it.
+📈|a graph going up, unclear about what
+🗂️|a folder named MISC containing a folder named MISC
+⚙️|a gear that turns nothing and is fine with that
+🔌|a plug that fits nothing in this house
+🪞|a mirror showing the room one second ago
+🧯|an extinguisher for a fire that was going fine
+🐌|a snail carrying a message from 1998
+🫖|a teapot caught mid-argument
+🧦|the other sock. it is fine. it has been fine.
+🐙|an octopus doing your taxes, badly, cheerfully
+🎺|a trumpet that only plays at 4am
+🪑|a chair that has been standing all day
+🧸|a bear who has been waiting very politely
+📮|a mailbox holding one letter, addressed to the mailbox
+🕰️|a clock running slightly hopeful
+🐸|a frog holding your place in a queue
+🪶|a feather from a bird that denies everything
+🎈|a balloon at the end of its shift
+🪤|a mousetrap baited with an apology
+🔭|a telescope aimed at the wall, learning
+🧤|a glove waving at nobody in particular
+🐝|a bee taking a personal day
+🥁|a drum roll that never resolved
+🪆|a nesting doll, one short
+🗝️|a key to a door in a different cabinet
+🧿|an eye that blinked while you were not looking
+🎩|a hat with a rabbit's forwarding address
+🪰|a fly, rehearsing
+🧻|the last square, saved for someone special
+🪥|a toothbrush with strong opinions
+🕯️|a candle burning at one end, sensibly
+🧺|a basket of things that go somewhere else
+🪁|a kite that has never been outdoors
+🦆|a duck. no notes.
+📻|a radio playing the room next door
+🧩|the last piece. wrong puzzle.
+🥁|a cymbal waiting for its cue since Tuesday
+🦴|a bone, filed under PENDING
+🪴|a plant that has been listening
+🎐|a wind chime indoors, undeterred
+🧊|a very small iceberg, mostly above water
+🚪|another door. smaller. locked.
+🕳️|a hole, borrowed
+📦|an empty box marked FULL
+🫥|something that left just before you opened this
+🧾|a receipt for this door
+🔦|a flashlight pointed into the room you are in
+🪟|a window, indoors, showing indoors
+🫙|nothing. it is a very good nothing.
+`.trim().split('\n').map(l => l.split('|'));
+
+/* ===================================================================
+   Sound. All synthesized, no files.
+   =================================================================== */
+
+const FX = (() => {
+  let ctx = null, on = true;
+  const ac = () => (ctx ||= new (window.AudioContext || window.webkitAudioContext)());
+
+  function noise(dur) {
+    const c = ac(), n = Math.floor(c.sampleRate * dur);
+    const buf = c.createBuffer(1, n, c.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+    const src = c.createBufferSource();
+    src.buffer = buf;
+    return src;
+  }
+
+  function creak() {
+    if (!on) return;
+    const c = ac(), src = noise(.3), f = c.createBiquadFilter(), g = c.createGain();
+    f.type = 'bandpass';
+    f.Q.value = 7;
+    f.frequency.setValueAtTime(320, c.currentTime);
+    f.frequency.exponentialRampToValueAtTime(880, c.currentTime + .26);
+    g.gain.setValueAtTime(.09, c.currentTime);
+    g.gain.exponentialRampToValueAtTime(.001, c.currentTime + .3);
+    src.connect(f).connect(g).connect(c.destination);
+    src.start();
+  }
+
+  function latch() {
+    if (!on) return;
+    const c = ac(), o = c.createOscillator(), g = c.createGain();
+    o.type = 'triangle';
+    o.frequency.setValueAtTime(210, c.currentTime);
+    o.frequency.exponentialRampToValueAtTime(90, c.currentTime + .05);
+    g.gain.setValueAtTime(.13, c.currentTime);
+    g.gain.exponentialRampToValueAtTime(.001, c.currentTime + .07);
+    o.connect(g).connect(c.destination);
+    o.start();
+    o.stop(c.currentTime + .08);
+  }
+
+  function whoosh() {
+    if (!on) return;
+    const c = ac(), src = noise(.6), f = c.createBiquadFilter(), g = c.createGain();
+    f.type = 'lowpass';
+    f.frequency.setValueAtTime(2400, c.currentTime);
+    f.frequency.exponentialRampToValueAtTime(220, c.currentTime + .55);
+    g.gain.setValueAtTime(.16, c.currentTime);
+    g.gain.exponentialRampToValueAtTime(.001, c.currentTime + .6);
+    src.connect(f).connect(g).connect(c.destination);
+    src.start();
+  }
+
+  return {
+    creak, latch, whoosh,
+    toggle: () => (on = !on),
+    get on() { return on; },
+  };
+})();
+
+/* ===================================================================
+   The wall
+   =================================================================== */
+
+const wall = document.getElementById('wall');
+const banner = document.getElementById('banner');
+const DOOR_COUNT = 30;
+const SHAPES = [
+  { c: 1, r: 1, w: 68 },
+  { c: 2, r: 1, w: 15 },
+  { c: 1, r: 2, w: 10 },
+  { c: 2, r: 2, w: 7 },
+];
+
+const recent = [];
+const rand = n => Math.floor(Math.random() * n);
+const chance = p => Math.random() < p;
+
+function weighted(list) {
+  let roll = Math.random() * list.reduce((a, s) => a + s.w, 0);
+  return list.find(s => (roll -= s.w) <= 0) || list[0];
+}
+
+/* Avoid repeating anything from the last stretch of openings. */
+function pickFind() {
+  let i;
+  do { i = rand(FINDS.length); } while (recent.includes(i) && recent.length < FINDS.length);
+  recent.push(i);
+  if (recent.length > 22) recent.shift();
+  return FINDS[i];
+}
+
+function buildWall() {
+  wall.innerHTML = '';
+  const numbers = shuffled([...Array(DOOR_COUNT).keys()].map(n => n + 1));
+  for (let i = 0; i < DOOR_COUNT; i++) {
+    const shape = weighted(SHAPES);
+    const door = document.createElement('button');
+    door.className = 'door' + (chance(.5) ? ' hinge-right' : '') + (shape.c > 1 ? ' wide' : '');
+    door.style.gridColumn = `span ${shape.c}`;
+    door.style.gridRow = `span ${shape.r}`;
+    door.setAttribute('aria-label', `door ${numbers[i]}`);
+    door.innerHTML =
+      `<span class="inside"><span class="find"></span><span class="cap"></span></span>` +
+      `<span class="panel"><span class="num">${numbers[i]}</span><span class="knob"></span></span>`;
+    door.addEventListener('click', () => toggleDoor(door));
+    wall.appendChild(door);
+  }
+}
+
+function shuffled(a) {
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = rand(i + 1);
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+/* ===================================================================
+   Opening, closing, and the things that occasionally happen instead
+   =================================================================== */
+
+let openedSinceShuffle = 0;
+
+function fill(door, find) {
+  door.querySelector('.find').textContent = find[0];
+  door.querySelector('.cap').textContent = find[1];
+}
+
+function openDoor(door, quiet) {
+  if (door.classList.contains('open')) return;
+  fill(door, pickFind());
+  door.classList.add('open');
+  openedSinceShuffle++;
+  if (!quiet) FX.creak();
+}
+
+function closeDoor(door) {
+  door.classList.remove('open');
+  FX.latch();
+  maybeShuffle();
+}
+
+function toggleDoor(door) {
+  if (door.classList.contains('open')) return closeDoor(door);
+
+  // stuck: refuses once, opens on the next try
+  if (!door.dataset.freed && chance(.04)) {
+    door.dataset.freed = '1';
+    door.classList.add('stuck');
+    FX.latch();
+    setTimeout(() => door.classList.remove('stuck'), 360);
+    return;
+  }
+
+  openDoor(door);
+
+  if (chance(.006)) return sneeze();
+  if (chance(.03)) return escape(door);
+  if (chance(.05)) {
+    const shut = [...wall.children].filter(d => !d.classList.contains('open'));
+    if (shut.length) setTimeout(() => openDoor(shut[rand(shut.length)]), 190);
+  }
+}
+
+/* Something gets out and crosses the room. */
+function escape(door) {
+  const box = door.getBoundingClientRect();
+  const runner = document.createElement('span');
+  runner.className = 'runner';
+  runner.textContent = door.querySelector('.find').textContent;
+  runner.style.left = box.left + box.width / 2 - 15 + 'px';
+  runner.style.top = box.top + box.height / 2 - 15 + 'px';
+  document.body.appendChild(runner);
+  setTimeout(() => runner.remove(), 1900);
+  door.querySelector('.find').textContent = '';
+  door.querySelector('.cap').textContent = 'it got out.';
+  FX.whoosh();
+}
+
+/* Very rarely, everything opens at once and then thinks better of it. */
+function sneeze() {
+  say('THE CABINET SNEEZED');
+  FX.whoosh();
+  [...wall.children].forEach((d, i) => setTimeout(() => openDoor(d, true), i * 12));
+  setTimeout(() => {
+    [...wall.children].forEach(d => d.classList.remove('open'));
+    FX.latch();
+    maybeShuffle();
+  }, 1500);
+}
+
+function say(text) {
+  banner.textContent = text;
+  banner.classList.add('show');
+  setTimeout(() => banner.classList.remove('show'), 1800);
+}
+
+/* The wall renumbers itself only while nothing is open, so it never
+   rearranges anything you are actually looking at. */
+function maybeShuffle() {
+  setTimeout(() => {
+    if (wall.querySelector('.open') || openedSinceShuffle === 0) return;
+    openedSinceShuffle = 0;
+    const nums = shuffled([...Array(DOOR_COUNT).keys()].map(n => n + 1));
+    const labels = [...wall.querySelectorAll('.num')];
+    labels.forEach(n => n.classList.add('fading'));
+    setTimeout(() => {
+      labels.forEach((n, i) => {
+        n.textContent = nums[i];
+        n.closest('.door').setAttribute('aria-label', `door ${nums[i]}`);
+        n.classList.remove('fading');
+      });
+    }, 300);
+  }, 700);
+}
+
+/* ===================================================================
+   Wiring
+   =================================================================== */
+
+document.getElementById('sound').addEventListener('click', e => {
+  FX.toggle();
+  e.target.textContent = 'sound: ' + (FX.on ? 'on' : 'off');
+});
+
+document.getElementById('rebuild').addEventListener('click', () => {
+  buildWall();
+  openedSinceShuffle = 0;
+});
+
+buildWall();
+</script>
+</body>
+</html>
