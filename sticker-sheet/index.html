@@ -30,24 +30,32 @@
   }
 
   /* ---- the backing sheet ---- */
+  /* Not one sheet but a pad of them: each theme gets its own paper, so the
+     colour under the stickers changes with the band. The flap is translated
+     well outside its cell before it is clipped back in, so this has to clip or
+     the page grows a phantom 150px to the right. */
   #sheet {
     margin: 0 auto;
-    padding: 34px var(--gap) 120px;
     max-width: calc(9 * (var(--s) + var(--gap)));
+    min-height: 100vh;
+    overflow: clip;
+    background: var(--sheet);
+    box-shadow: 0 0 0 1px var(--sheet-line), 0 22px 60px rgba(0,0,0,.55);
+  }
+
+  .band {
     display: grid;
     grid-template-columns: repeat(auto-fill, var(--s));
     justify-content: center;
     gap: var(--gap);
+    padding: var(--gap);
     background:
       repeating-linear-gradient(0deg, transparent 0 3px, rgba(0,0,0,.014) 3px 4px),
-      linear-gradient(180deg, #f3ecdb, var(--sheet));
-    box-shadow: 0 0 0 1px var(--sheet-line), 0 22px 60px rgba(0,0,0,.55);
-    min-height: 100vh;
+      linear-gradient(180deg, rgba(255,255,255,.35), rgba(255,255,255,0) 40%),
+      var(--paper);
   }
-
-  /* the flap is translated well outside its cell before it is clipped back in,
-     so the sheet has to clip or the page grows a phantom 150px to the right */
-  #sheet { overflow: clip; }
+  /* where one sheet lies on the next */
+  .band + .band { box-shadow: inset 0 1px 0 rgba(86,72,44,.20), inset 0 7px 12px -7px rgba(86,72,44,.35); }
 
   .cell { position: relative; width: var(--s); height: var(--s); }
 
@@ -56,8 +64,8 @@
     position: absolute; inset: 0;
     border-radius: var(--r);
     transform: rotate(var(--rot));
-    background: rgba(120,104,70,.10);
-    box-shadow: inset 0 1px 2px rgba(90,76,44,.20);
+    background: rgba(0,0,0,.07);
+    box-shadow: inset 0 1px 2px rgba(60,48,24,.20);
   }
 
   .sticker {
@@ -152,26 +160,32 @@
    repetitive one. */
 const THEMES = {
   space: {
+    paper: '#e6e3f4',
     glyphs: '🚀🪐🛸🌙⭐👽🔭🌍✨👾🌞🌛🌀📡🌝🤖🧪🔬🧬🥽🔋🧲💎💠🧊🔦',
     cols: ['#7b86e0', '#9a7fe4', '#c07fdd', '#e07fb8', '#5c9de8', '#4fb4c9', '#f0c250'],
   },
   food: {
+    paper: '#f6ead2',
     glyphs: '🍩🍕🧁🍦🍓🍉🥐🍪🍇🍒🎂🥑🍌🍭🌮🍋🥕🍔🍟🍍🥨🍎🍿🌽🧋🥦🧀🍬🍯🍄🥝🍧🍤🌭🍹🍊🍣🥒🥪🥖🍏🥤',
     cols: ['#f0a04b', '#e76b83', '#f3d06a', '#8ec06f', '#7a9ad9', '#c98a5f', '#b07fd0'],
   },
   animals: {
+    paper: '#e5ecd9',
     glyphs: '🦋🐙🐢🐧🐝🦊🐘🦉🐞🦀🐬🦒🦩🐳🦔🐸🐨🐼🐌🐠🦜🐊🦘🦌🐅🐻🦏🐍🐫🦆🐥🐷🐴🐾🐹🐵🐈🐦🐓🦖🦕🐛🦄🦈',
     cols: ['#e3a24d', '#d97a63', '#79c08a', '#a7c95c', '#5aa8d4', '#b98fd6', '#efc44f'],
   },
   games: {
+    paper: '#f7e2e3',
     glyphs: '🎲🎮🧩🎯🎰👾🎱🧸🎳🤖🎪🪅🪁🏆🎈🎴🥇🏓🎩🛼🃏🥏🎠🎡🎢',
     cols: ['#e0605a', '#f0a336', '#ecc63f', '#5fbc7d', '#5fa6ee', '#a97fe8', '#ee7fb0'],
   },
   nature: {
+    paper: '#dcece8',
     glyphs: '🌸🌈🍄🌵🌻🍁🌊🔥🌴🌷🪴🌲🍀⛄🌹☔🌳🌺🌱⛅🌿🌾🌋🍂🌼🪷🪺🍃🌰💧',
     cols: ['#6fbf87', '#b3d468', '#45b8a4', '#57bcd6', '#f0a24e', '#e08fa0', '#c8a97e'],
   },
   oddities: {
+    paper: '#ece4d6',
     glyphs: '🪠🎩🧦📠🧯🪃🗿🪑🧹💾🪜🪞🧶🪣🧰⏰📻🔌🧭🥁🎺🥾🧳🪛🧢🔑👑⌛🏮🔔💡📌📮',
     cols: ['#d9a441', '#c9705a', '#6fae9a', '#8fa9c9', '#b490c4', '#a8b26a', '#d98fa0'],
   },
@@ -186,12 +200,12 @@ const rnd = a => a[(Math.random() * a.length) | 0];
 /* Pure random draw clusters — two identical stickers side by side read as a
    printing fault rather than as chance. Remember the last few of each kind and
    draw again if we land on one. */
-const seen = { glyph: [], col: [] };
+const seen = { glyph: [], col: [], theme: [] };
 
 function pick(pool, kind, span) {
   const mem = seen[kind];
-  let v = rnd(pool);
-  for (let i = 0; i < 8 && mem.includes(v); i++) v = rnd(pool);
+  const fresh = pool.filter(v => !mem.includes(v));
+  const v = rnd(fresh.length ? fresh : pool);
   mem.push(v);
   if (mem.length > span) mem.shift();
   return v;
@@ -228,24 +242,35 @@ function makeCell(theme) {
 const sheet = document.getElementById('sheet');
 const loose = document.getElementById('loose');
 
-let band = '', bandLeft = 0;
+let band = '', bandLeft = 0, bandEl = null;
+
+const px = name => parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name));
 
 function nextBand() {
-  const keys = Object.keys(THEMES);
-  const fresh = keys.filter(k => k !== band);      // never the same theme twice running
-  band = rnd(fresh.length ? fresh : keys);
-  bandLeft = Math.max(FLOOR, Math.round(THEMES[band].glyphs.length * BAND));
-  seen.glyph.length = seen.col.length = 0;
+  // avoid the last two themes, not just the last one, or the sheet alternates
+  band = pick(Object.keys(THEMES), 'theme', 2);
+
+  bandEl = document.createElement('div');
+  bandEl.className = 'band';
+  bandEl.style.setProperty('--paper', THEMES[band].paper);
+  sheet.appendChild(bandEl);
+
+  // round up to whole rows, so a sheet of paper is a rectangle rather than an
+  // L-shape with the colour changing halfway along a row
+  const s = px('--s'), gap = px('--gap');
+  const cols = Math.max(1, Math.floor((bandEl.clientWidth - gap) / (s + gap)));
+  const want = Math.max(FLOOR, Math.round(THEMES[band].glyphs.length * BAND));
+  bandLeft = Math.ceil(want / cols) * cols;
+
+  seen.glyph.length = seen.col.length = 0;   // fresh sheet, but themes keep their memory
 }
 
 function grow(n) {
-  const frag = document.createDocumentFragment();
   for (let i = 0; i < n; i++) {
     if (bandLeft <= 0) nextBand();
     bandLeft--;
-    frag.appendChild(makeCell(band));
+    bandEl.appendChild(makeCell(band));
   }
-  sheet.appendChild(frag);
 }
 grow(120);
 
