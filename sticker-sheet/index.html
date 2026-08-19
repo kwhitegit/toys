@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sticker Sheet</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='4' y='4' width='24' height='24' rx='7' fill='%23f6b23e'/><path d='M28 21 L21 28 L21 21 Z' fill='%23fffdf7'/></svg>">
+<style>
+  @property --c { syntax: '<length>'; inherits: true; initial-value: 0px; }
+
+  :root {
+    --bg: #0b0d12;
+    --ink: #e8ecf5;
+    --dim: #7c8598;
+    --sheet: #efe7d4;
+    --sheet-line: #ddd2ba;
+    --s: 104px;      /* sticker size, and the unit all the peel math is in */
+    --gap: 16px;
+  }
+  @media (max-width: 560px) { :root { --s: 84px; --gap: 12px; } }
+
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.4 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+    overscroll-behavior-y: none;
+  }
+
+  /* ---- the backing sheet ---- */
+  #sheet {
+    margin: 0 auto;
+    padding: 34px var(--gap) 120px;
+    max-width: calc(9 * (var(--s) + var(--gap)));
+    display: grid;
+    grid-template-columns: repeat(auto-fill, var(--s));
+    justify-content: center;
+    gap: var(--gap);
+    background:
+      repeating-linear-gradient(0deg, transparent 0 3px, rgba(0,0,0,.014) 3px 4px),
+      linear-gradient(180deg, #f3ecdb, var(--sheet));
+    box-shadow: 0 0 0 1px var(--sheet-line), 0 22px 60px rgba(0,0,0,.55);
+    min-height: 100vh;
+  }
+
+  /* the flap is translated well outside its cell before it is clipped back in,
+     so the sheet has to clip or the page grows a phantom 150px to the right */
+  #sheet { overflow: clip; }
+
+  .cell { position: relative; width: var(--s); height: var(--s); }
+
+  /* the ghost left behind by a sticker that is gone */
+  .hole {
+    position: absolute; inset: 0;
+    border-radius: var(--r);
+    transform: rotate(var(--rot));
+    background: rgba(120,104,70,.10);
+    box-shadow: inset 0 1px 2px rgba(90,76,44,.20);
+  }
+
+  .sticker {
+    position: absolute; inset: 0;
+    transform: rotate(var(--rot));
+    touch-action: none;
+    cursor: grab;
+    --c: 0px;
+  }
+  .sticker.snap { transition: --c .3s cubic-bezier(.25,1.5,.5,1); }
+
+  .face {
+    position: absolute; inset: 0;
+    border-radius: var(--r);
+    background: #fffdf6;
+    filter: drop-shadow(0 1px 1.5px rgba(72,58,28,.35));
+    clip-path: polygon(0 0, 100% 0, 100% calc(100% - var(--c)), calc(100% - var(--c)) 100%, 0 100%);
+  }
+  .art {
+    position: absolute; inset: 6%;
+    border-radius: var(--r);
+    background: radial-gradient(120% 100% at 26% 14%, rgba(255,255,255,.55), rgba(255,255,255,0) 52%), var(--col);
+    display: grid; place-items: center;
+    font-size: calc(var(--s) * .42);
+    line-height: 1;
+    user-select: none;
+  }
+  .art::after {
+    content: ''; position: absolute; inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(200deg, rgba(255,255,255,.34) 0 26%, rgba(255,255,255,0) 46%);
+  }
+
+  /* the curled-back corner: the same square, reflected across the fold line */
+  .flap {
+    position: absolute; inset: 0;
+    transform-origin: 0 0;   /* the fold math is written for the corner, not the centre */
+    border-radius: var(--r);
+    background: linear-gradient(135deg, #ffffff 0%, #fbf6ea 30%, #eadfc6 66%, #c9bb9c 100%);
+    clip-path: polygon(100% calc(100% - var(--c)), 100% 100%, calc(100% - var(--c)) 100%);
+    transform:
+      translate(calc(2 * var(--s) - var(--c)), calc(2 * var(--s) - var(--c)))
+      matrix(0, -1, -1, 0, 0, 0);
+    filter: drop-shadow(-4px -4px 5px rgba(64,50,20,.5));
+  }
+
+  /* ---- stickers stuck to the glass ---- */
+  #loose { position: fixed; inset: 0; pointer-events: none; z-index: 50; }
+  .loose {
+    position: fixed;
+    transform: rotate(var(--rot));
+    width: var(--s); height: var(--s);
+    pointer-events: auto;
+    touch-action: none;
+    cursor: grab;
+    animation: pop .18s ease-out;
+  }
+  .loose .face { clip-path: none; filter: drop-shadow(0 3px 6px rgba(0,0,0,.45)); }
+  .loose.dragging { cursor: grabbing; }
+  .loose.dragging .face { filter: drop-shadow(0 10px 14px rgba(0,0,0,.5)); }
+  @keyframes pop { from { transform: scale(.86) rotate(var(--rot)); } }
+
+  /* ---- the only chrome ---- */
+  #hint {
+    position: fixed; left: 0; right: 0; bottom: 22px;
+    text-align: center; color: var(--dim); font-size: 13px;
+    letter-spacing: .04em; pointer-events: none; z-index: 60;
+    transition: opacity .6s;
+  }
+  #snd {
+    position: fixed; right: 14px; bottom: 14px; z-index: 60;
+    width: 32px; height: 32px; border-radius: 50%;
+    border: 1px solid #2a3142; background: #141821; color: var(--dim);
+    font-size: 14px; cursor: pointer; opacity: .5;
+  }
+  #snd:hover { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div id="sheet"></div>
+<div id="loose"></div>
+<div id="hint">drag a sticker's bottom-right corner</div>
+<button id="snd" title="sound">&#9834;</button>
+
+<script>
+/* ---------------------------------------------------------------- art ---- */
+
+const COLORS = [
+  '#f6b23e', '#ef6f5e', '#7fc4a6', '#7aa7f0', '#c58ce0', '#e8d24a',
+  '#f0907c', '#5fc0c8', '#a8cf5f', '#ee8fb4', '#8f9ff0', '#f4a259',
+];
+const GLYPHS = [...'🍋🌵🦆🧀🚀🐌🍄🪐🐙🧦🎈🥐🦉🍉🧭🐝🌈🦀🍿🪵🐸🎺🧊🍒🪁🦡🌻🥨🐞🎲🧅🪱🍩🦩🛼🧿🐳🌶🕯🪀'];
+const RADII  = ['50%', '26%', '14%', '38%'];
+
+const rnd = a => a[(Math.random() * a.length) | 0];
+
+function makeSticker() {
+  const el = document.createElement('div');
+  el.className = 'sticker';
+  el.style.setProperty('--r', rnd(RADII));
+  el.style.setProperty('--col', rnd(COLORS));
+  el.style.setProperty('--rot', (Math.random() * 5 - 2.5).toFixed(2) + 'deg');
+  el.innerHTML = '<div class="face"><div class="art">' + rnd(GLYPHS) + '</div></div><div class="flap"></div>';
+  return el;
+}
+
+function makeCell() {
+  const cell = document.createElement('div');
+  cell.className = 'cell';
+  const st = makeSticker();
+  const hole = document.createElement('div');
+  hole.className = 'hole';
+  hole.style.setProperty('--r', st.style.getPropertyValue('--r'));
+  hole.style.setProperty('--rot', st.style.getPropertyValue('--rot'));
+  cell.append(hole, st);
+  return cell;
+}
+
+/* ------------------------------------------------------------ the sheet -- */
+
+const sheet = document.getElementById('sheet');
+const loose = document.getElementById('loose');
+
+function grow(n) {
+  const frag = document.createDocumentFragment();
+  for (let i = 0; i < n; i++) frag.appendChild(makeCell());
+  sheet.appendChild(frag);
+}
+grow(120);
+
+addEventListener('scroll', () => {
+  if (scrollY + innerHeight > document.body.scrollHeight - 900) grow(60);
+}, { passive: true });
+
+/* ---------------------------------------------------------------- sound -- */
+
+let ac = null, on = true;
+const ctx = () => (ac ||= new (window.AudioContext || window.webkitAudioContext)());
+
+function noise(dur) {
+  const c = ctx(), n = Math.max(1, (c.sampleRate * dur) | 0);
+  const buf = c.createBuffer(1, n, c.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+  const src = c.createBufferSource();
+  src.buffer = buf;
+  return src;
+}
+
+function crackle(p) {
+  if (!on) return;
+  const c = ctx(), src = noise(.03);
+  const bp = c.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = 800 + 2800 * p + Math.random() * 500;
+  bp.Q.value = 3.5;
+  const g = c.createGain();
+  g.gain.setValueAtTime(.05 + .05 * Math.random(), c.currentTime);
+  g.gain.exponentialRampToValueAtTime(.0001, c.currentTime + .04);
+  src.connect(bp).connect(g).connect(c.destination);
+  src.start();
+}
+
+function pop() {
+  if (!on) return;
+  const c = ctx(), o = c.createOscillator(), g = c.createGain();
+  o.type = 'triangle';
+  o.frequency.setValueAtTime(720, c.currentTime);
+  o.frequency.exponentialRampToValueAtTime(190, c.currentTime + .08);
+  g.gain.setValueAtTime(.16, c.currentTime);
+  g.gain.exponentialRampToValueAtTime(.0001, c.currentTime + .11);
+  o.connect(g).connect(c.destination);
+  o.start(); o.stop(c.currentTime + .12);
+
+  const src = noise(.05), hp = c.createBiquadFilter(), g2 = c.createGain();
+  hp.type = 'highpass'; hp.frequency.value = 2200;
+  g2.gain.setValueAtTime(.09, c.currentTime);
+  g2.gain.exponentialRampToValueAtTime(.0001, c.currentTime + .06);
+  src.connect(hp).connect(g2).connect(c.destination);
+  src.start();
+}
+
+function flop() {
+  if (!on) return;
+  const c = ctx(), src = noise(.09), lp = c.createBiquadFilter(), g = c.createGain();
+  lp.type = 'lowpass'; lp.frequency.value = 700;
+  g.gain.setValueAtTime(.13, c.currentTime);
+  g.gain.exponentialRampToValueAtTime(.0001, c.currentTime + .1);
+  src.connect(lp).connect(g).connect(c.destination);
+  src.start();
+}
+
+document.getElementById('snd').onclick = e => {
+  on = !on;
+  e.currentTarget.style.color = on ? '' : '#3c4457';
+};
+
+/* --------------------------------------------------------------- peeling - */
+
+const FREE = .46;          // how far through the fold it lets go
+let hint = document.getElementById('hint');
+
+sheet.addEventListener('pointerdown', e => {
+  const st = e.target.closest('.sticker');
+  if (!st) return;
+  e.preventDefault();
+  if (ac) ac.resume();
+
+  const S = st.offsetWidth;
+  const x0 = e.clientX, y0 = e.clientY;
+  let c = 0, lastSound = 0, lastX = x0, lastY = y0;
+
+  st.classList.remove('snap');
+  try { st.setPointerCapture(e.pointerId); } catch (_) { /* peel still works uncaptured */ }
+
+  const move = ev => {
+    // how far the corner has been dragged up and to the left, along the fold normal
+    const d = ((x0 - ev.clientX) + (y0 - ev.clientY)) / Math.SQRT2;
+    c = Math.max(0, Math.min(S, d));
+    lastX = ev.clientX; lastY = ev.clientY;
+    st.style.setProperty('--c', c + 'px');
+    if (Math.abs(c - lastSound) > 9) {
+      lastSound = c;
+      crackle(c / S);
+    }
+  };
+
+  const up = () => {
+    st.removeEventListener('pointermove', move);
+    st.removeEventListener('pointerup', up);
+    st.removeEventListener('pointercancel', up);
+    if (c / S > FREE) free(st, lastX, lastY);
+    else {
+      if (c > 4) flop();
+      st.classList.add('snap');
+      st.style.setProperty('--c', '0px');
+    }
+  };
+
+  st.addEventListener('pointermove', move);
+  st.addEventListener('pointerup', up);
+  st.addEventListener('pointercancel', up);
+}, { passive: false });
+
+function free(st, px, py) {
+  pop();
+  if (hint) { hint.style.opacity = 0; hint = null; }
+
+  const r = st.getBoundingClientRect();
+  const el = st.cloneNode(true);
+  st.remove();
+
+  el.className = 'loose';
+  el.style.removeProperty('--c');
+  el.style.setProperty('--rot', (Math.random() * 26 - 13).toFixed(2) + 'deg');
+  // it comes away in your hand, rather than snapping back to its cell
+  const x = px == null ? r.left : px - r.width * .88;
+  const y = py == null ? r.top  : py - r.height * .88;
+  el.style.left = Math.max(12, Math.min(innerWidth  - r.width  - 12, x)) + 'px';
+  el.style.top  = Math.max(12, Math.min(innerHeight - r.height - 12, y)) + 'px';
+  const flap = el.querySelector('.flap');
+  if (flap) flap.remove();
+  loose.appendChild(el);
+
+  // the glass is not infinite, even if the sheet is
+  while (loose.children.length > 70) loose.firstElementChild.remove();
+}
+
+/* stickers on the glass can be slid around */
+loose.addEventListener('pointerdown', e => {
+  const el = e.target.closest('.loose');
+  if (!el) return;
+  e.preventDefault();
+  const r = el.getBoundingClientRect();
+  const ox = e.clientX - r.left, oy = e.clientY - r.top;
+  el.classList.add('dragging');
+  loose.appendChild(el);                       // to the top of the pile
+  el.setPointerCapture(e.pointerId);
+
+  const move = ev => {
+    el.style.left = (ev.clientX - ox) + 'px';
+    el.style.top  = (ev.clientY - oy) + 'px';
+  };
+  const up = () => {
+    el.classList.remove('dragging');
+    el.removeEventListener('pointermove', move);
+    el.removeEventListener('pointerup', up);
+    el.removeEventListener('pointercancel', up);
+  };
+  el.addEventListener('pointermove', move);
+  el.addEventListener('pointerup', up);
+  el.addEventListener('pointercancel', up);
+}, { passive: false });
+</script>
+</body>
+</html>
