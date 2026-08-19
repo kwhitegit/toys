@@ -1,0 +1,627 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Ceiling Machine</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='3' y='4' width='26' height='3' rx='1.5' fill='%23b8342b'/><path d='M16 27 L16 12 M16 12 L11 17 M16 12 L21 17' stroke='%23e8ecf5' stroke-width='2.4' fill='none' stroke-linecap='round'/></svg>">
+<style>
+  :root {
+    --bg: #0b0d12;
+    --ink: #e8ecf5;
+    --dim: #7c8598;
+    --line: #262c3a;
+    --paper: #f6f1e2;
+    --paper-edge: #ded5bd;
+    --type: #21201c;
+    --faint: #6d6857;
+    --stamp: #b8342b;
+  }
+  * { box-sizing: border-box; }
+  html, body { min-height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 34px 18px 80px;
+  }
+
+  /* ---- the machine ---- */
+  h1 {
+    font: 600 15px/1 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: .22em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin: 0 0 20px;
+  }
+
+  form { display: flex; gap: 8px; width: min(660px, 100%); }
+  input {
+    flex: 1;
+    background: #141821;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--ink);
+    font: 16px/1 ui-sans-serif, system-ui, sans-serif;
+    padding: 13px 14px;
+    min-width: 0;
+  }
+  input:focus { outline: none; border-color: #3d4658; }
+  input::placeholder { color: #4d5568; }
+  button {
+    background: #141821;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--ink);
+    font: 600 12px/1 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: .14em;
+    padding: 0 18px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  button:hover { border-color: #46506a; }
+
+  /* ---- the ordinance ---- */
+  .doc {
+    width: min(660px, 100%);
+    margin-top: 26px;
+    position: relative;
+    background: var(--paper);
+    color: var(--type);
+    border-radius: 2px;
+    padding: 38px 40px 30px;
+    font-family: Georgia, "Iowan Old Style", "Times New Roman", serif;
+    box-shadow:
+      0 0 0 1px var(--paper-edge),
+      0 18px 40px rgba(0,0,0,.5),
+      inset 0 0 60px rgba(150,130,80,.07);
+    animation: issue .32s cubic-bezier(.2,.9,.3,1);
+  }
+  @keyframes issue { from { opacity: 0; transform: translateY(-9px) rotate(-.4deg); } }
+  .doc:empty { display: none; }
+
+  .masthead {
+    display: flex; justify-content: space-between; align-items: baseline;
+    gap: 16px; flex-wrap: wrap;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 10.5px; letter-spacing: .13em; text-transform: uppercase;
+    color: var(--faint);
+  }
+  .rule { border: 0; border-top: 2px solid var(--type); margin: 14px 0 20px; opacity: .82; }
+  .rule.thin { border-top: 1px solid rgba(33,32,28,.28); margin: 20px 0 14px; }
+
+  .matter {
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--faint);
+  }
+  .matter b {
+    display: block; margin-top: 6px;
+    font: 700 21px/1.3 Georgia, serif; letter-spacing: .01em;
+    text-transform: none; color: var(--type);
+  }
+
+  .operative { font-size: 17.5px; line-height: 1.55; margin: 18px 0 4px; }
+  .operative em { font-style: normal; text-decoration: underline; text-underline-offset: 3px; }
+  .operative strong { font-weight: 700; letter-spacing: .02em; }
+
+  dl { margin: 18px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 7px 16px; }
+  dt {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--faint); padding-top: 4px;
+  }
+  dd { margin: 0; font-size: 15.5px; }
+
+  .clauses { margin: 0; padding: 0; list-style: none; font-size: 14px; color: #3a382f; }
+  .clauses li { margin: 7px 0; display: flex; gap: 10px; }
+  .clauses li { padding-right: 150px; }   /* the stamp lands here */
+  .clauses .n {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 11.5px; color: var(--faint); padding-top: 2px; white-space: nowrap;
+  }
+
+  .foot {
+    position: relative;
+    margin-top: 22px; padding-top: 12px;
+    border-top: 1px solid rgba(33,32,28,.18);
+    display: flex; justify-content: space-between; gap: 14px; flex-wrap: wrap;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 10px; letter-spacing: .08em; color: var(--faint);
+  }
+
+  .stamp {
+    position: absolute; right: 0; bottom: 100%; margin-bottom: 14px;
+    border: 3px double var(--stamp);
+    border-radius: 4px;
+    color: var(--stamp);
+    font: 700 17px/1 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: .16em;
+    padding: 9px 13px;
+    transform: rotate(-11deg);
+    opacity: .74;
+    text-transform: uppercase;
+    pointer-events: none;
+    animation: thump .22s cubic-bezier(.2,1.4,.4,1) .12s backwards;
+  }
+  @keyframes thump { from { transform: rotate(-11deg) scale(2.1); opacity: 0; } }
+
+  .after { display: flex; gap: 8px; margin-top: 16px; width: min(660px, 100%); }
+  .after button { padding: 11px 16px; }
+
+  @media (max-width: 560px) {
+    .doc { padding: 28px 22px 26px; }
+    .stamp { font-size: 13px; padding: 7px 10px; }
+    .clauses li { padding-right: 104px; }
+  }
+</style>
+</head>
+<body>
+
+<h1>The Ceiling Machine</h1>
+
+<form id="f" autocomplete="off">
+  <input id="task" placeholder="clean the garage" aria-label="the task" spellcheck="false">
+  <button type="submit">ISSUE</button>
+</form>
+
+<div class="doc" id="doc" hidden></div>
+
+<div class="after" id="after" hidden>
+  <button id="amend">AMEND</button>
+</div>
+
+<script>
+/* -------------------------------------------------------------- corpus ---- */
+/* Every penalty is for doing too MUCH. Nothing anywhere punishes stopping. */
+
+const AGENCIES = [
+  "The Bureau of Enough",
+  "The Department of Leaving It",
+  "Office of Maximum Permissible Effort",
+  "The Sufficiency Board",
+  "Ministry of Adequate",
+  "Commission on Unnecessary Thoroughness",
+  "His Majesty's Inspectorate of Stopping",
+  "Bureau of Permissible Minutes",
+  "The Curtailment Registry",
+  "Effort Rationing Board",
+  "Agency for the Regulation of Zeal",
+  "Registry of Things Left As They Are",
+  "Department of Upper Limits",
+  "Office of the Registrar of Enough",
+  "Board of Statutory Ceilings",
+  "Ministry for the Restraint of Industry",
+  "The Quantity Surveyor General",
+  "Commission for the Prevention of Finishing",
+  "The Superfluity Commission",
+  "Office of Rounding Down",
+  "Council of Partial Measures",
+  "Inspectorate of Excessive Application",
+  "The Excess Works Authority",
+  "Ministry of Small Amounts",
+  "Bureau of Last Reasonable Acts",
+  "Office of the Perpetual Adjournment",
+  "Board of Trade in Unfinished Business",
+  "The Overruns Commission",
+  "Office of Statutory Limitation",
+  "The Allowance Office",
+  "Directorate of Tolerated Quantities",
+  "Registry of Matters Considered Closed",
+  "Office of Commenced Works",
+  "Council of Statutory Restraint",
+  "The Bureau of Reasonable Endeavours",
+  "The Exertion Control Board",
+  "Chamber of Permitted Activity",
+  "The Bureau of the Half Hour",
+  "Board of Works Not Required",
+  "The Assize of Labour",
+  "The Superintendent of Small Undertakings",
+  "Committee on Permitted Extent",
+  "The Licensing Authority for Voluntary Attendance",
+  "Office of Diminishing Permission",
+  "Directorate of Containment",
+  "The Office of Curfews",
+];
+
+const PENALTIES = [
+  "the remainder is forfeit to the state",
+  "the task is declared complete in your absence",
+  "surplus effort will be confiscated at the door",
+  "a second inspector is dispatched and will bring forms",
+  "all further progress is recorded under a previous tenant's name",
+  "a Form 9 must be filed explaining the overage in triplicate",
+  "the additional minutes are deducted from next week's allowance",
+  "the surplus is taxed at a rate to be determined later",
+  "the activity is reclassified as unlicensed labour",
+  "the object is placed in protective custody until further notice",
+  "the remainder is redistributed to households operating under lower ceilings",
+  "your permit is suspended for the remainder of the afternoon",
+  "the overage accrues interest payable in future afternoons",
+  "the site is condemned as excessively tidy",
+  "the matter is referred to the Committee on Doing Too Much",
+  "your name is added to the register of persistent finishers",
+  "further participation requires a hearing that will not be scheduled",
+  "the improvement is reversed by order of the inspectorate",
+  "the extra work is struck from the record as unperformed",
+  "a notice is affixed to the door and may not be removed",
+  "the ceiling is lowered by three minutes at the next issuance",
+  "the remainder is transferred to tomorrow without your consent",
+  "an appeal may be lodged but will not be read",
+  "the additional effort is destroyed under standing disposal policy",
+  "the overage is published in the local record without comment",
+  "the Inspectorate of Sufficiency will attend within thirty days",
+  "the premises are downgraded to Category Three and posted publicly",
+  "a warden is assigned to the doorway for the rest of the day",
+  "the finished portion is confiscated and displayed as a warning",
+  "the surplus is weighed, sealed, and stored in the county vault",
+  "the additional work is reclassified as a public nuisance",
+  "the case is transferred to a department that no longer exists",
+  "the excess is referred to the Registrar of Unnecessary Improvements",
+  "the surplus is set out for collection on Thursday with the recycling",
+  "the result is embargoed until the Bureau has lost interest",
+  "a duplicate file is opened and immediately misplaced",
+  "the premises are entered in the schedule of excessive maintenance",
+  "the extra minutes are recovered by the Bureau at a time of its choosing",
+  "the surplus is measured by an officer in no particular hurry",
+  "the matter stands adjourned until the spring",
+  "further activity is suspended until Monday by administrative order",
+  "a warning is issued and a copy forwarded to the parish",
+  "the works are halted and a fence erected around them",
+  "the excess is collected by an officer who issues a receipt",
+  "the surplus is declared a hazard and cordoned off pending assessment",
+];
+
+const CLAUSES = [
+  "Perfection is expressly prohibited.",
+  "Beginning is compliance. Finishing is optional.",
+  "No portion of this allowance may be carried forward.",
+  "Nothing in this section shall be construed as encouragement.",
+  "This permit is non-transferable and may not be lent to a more industrious party.",
+  "Overachievement is a strict liability offence; intent is not a defence.",
+  "Effort expended beyond the ceiling is deemed to have occurred outside the jurisdiction and will not be recognised.",
+  "The Bureau does not hear appeals from parties who wish to do more.",
+  "Time spent standing still inside the permitted area counts in full toward the allowance.",
+  "The allowance may not be assigned to a future self, who is not a party to this ordinance.",
+  "A second attempt requires a separate permit issued under a separate ordinance.",
+  "The phrase just one more carries no legal force in this jurisdiction.",
+  "A partial result is a result. The Bureau does not grade.",
+  "The ceiling applies to thinking about the task as well as to performing it.",
+  "Enthusiasm is a controlled quantity under this section and may not exceed the permitted amount.",
+  "This clause was issued in triplicate. Two copies have already been lost.",
+  "Any implement still in hand at the ceiling must be set down where it stands.",
+  "The Bureau recognises no state described as almost finished.",
+  "Surplus work is confiscated at the boundary and disposed of without ceremony.",
+  "No fee is payable. No fee has ever been payable. Inquiries regarding the fee are refused.",
+  "The Subject may stop mid-drawer, mid-sentence, or mid-thought without penalty of any kind.",
+  "Compliance is presumed. The burden of proving excess rests entirely with the Bureau.",
+  "This ordinance supersedes all lists, whether written, spoken, or merely imagined.",
+  "The Subject's assessment of the outcome is inadmissible and will be struck from the record.",
+  "Subsections not read are deemed to have been complied with.",
+  "Any bystander who says while you are at it commits an offence under Ordinance 9.",
+  "Nothing performed today establishes a precedent for tomorrow.",
+  "Rounding is permitted in one direction only, and that direction is down.",
+  "The Bureau reserves the right to end the permitted period early, without notice or explanation.",
+  "Items returned to their original disorder are considered undisturbed for all purposes.",
+  "This section is enforceable in every room of the premises, including rooms not currently in use.",
+  "Should the Subject feel able to continue, the feeling is noted and denied.",
+  "Estimates given by the Subject regarding duration are not binding on the Subject or on anyone else.",
+  "The permitted quantity is a maximum. It has never been a minimum and cannot be converted into one.",
+  "Where the wording is ambiguous, the smaller reading governs.",
+  "Assistance offered by a third party does not raise the ceiling.",
+  "No part of this ordinance may be quoted back to the Subject as a challenge.",
+  "The Bureau keeps no record of what remains.",
+  "The Subject is not required to have an opinion about this ordinance.",
+  "Tidiness beyond the permitted quantity is an unpermitted improvement and must be reversed.",
+  "The ceiling remains in force on holidays, on weekends, and on days when conditions appear favourable.",
+  "No inspector holds jurisdiction under this ordinance. The Bureau's authority in the matter is exclusive.",
+  "An application to extend the ceiling may be submitted. It will be refused on receipt.",
+  "Exceedance is a continuing offence and accrues afresh in each minute it persists.",
+  "The ceiling is not raised by the conduct of neighbouring properties or their occupants.",
+  "Materials brought to the site in excess of the permitted quantity must be returned unopened.",
+  "The Bureau is closed. It has been closed throughout. Its determinations remain in force.",
+  "If any provision of this ordinance is found invalid, the ceiling survives unchanged.",
+  "Officers may attend the site at any hour to verify that the ceiling has been observed.",
+];
+
+/* A duration answers how long, a quantity answers how much, and they take
+   different sentences — mixing them yields "a period not exceeding four (4) items". */
+
+const DURATIONS = [
+  "eleven (11) minutes",
+  "nine (9) minutes, extension refused",
+  "seven (7) minutes, uninterrupted or otherwise",
+  "nineteen (19) minutes, inclusive of preparation",
+  "one quarter of one (1) hour",
+  "twelve (12) minutes under Schedule 4",
+  "four (4) minutes, non-transferable",
+  "two (2) songs of the Subject's choosing",
+  "one (1) side of one (1) record",
+  "one (1) episode, credits inclusive",
+  "one (1) podcast advert break",
+  "the trailers preceding one (1) film",
+  "one (1) verse and one (1) chorus",
+  "the length of one (1) kettle boiling",
+  "one (1) microwave cycle",
+  "the burn of one (1) tea light",
+  "the structural life of one (1) dunked biscuit",
+  "one (1) cup of coffee, taken hot",
+  "one (1) sitting",
+  "the interval between two (2) neighbour sightings",
+  "five (5) minutes, rounded down",
+  "eight (8) minutes, as varied by Order",
+  "the theme tune of one (1) programme",
+  "one (1) full turn of one (1) egg timer",
+  "the remaining charge of one (1) portable device",
+  "the duration of one (1) telephone hold queue",
+];
+
+const QUANTITIES = [
+  "one (1) drawer",
+  "whatever fits in one (1) hand",
+  "a single armful",
+  "one (1) shelf, at eye level or below",
+  "the contents of one (1) carrier bag",
+  "the first (1st) box",
+  "one (1) trip to the bin",
+  "one (1) load of laundry, folding excluded",
+  "two (2) sheets of A4",
+  "one (1) page, one (1) side",
+  "three (3) decisions",
+  "four (4) items, replacements included",
+  "six (6) objects, two (2) of them heavy",
+  "one (1) attempt",
+  "the reach of the Subject's arm while seated",
+  "the distance the vacuum cord permits",
+  "the left half of one (1) room",
+  "the visible portion of one (1) worktop",
+  "three (3) emails, replies inclusive",
+  "the length of one (1) hallway in one (1) direction",
+];
+
+const EXPIRIES = [
+  "at dusk",
+  "on loss of interest, whichever is sooner",
+  "at the bottom of the cup",
+  "on the third sigh",
+  "when the washing machine finishes its cycle",
+  "at the sound of a door closing elsewhere in the building",
+  "thirty (30) minutes from now, non-renewable",
+  "midnight, local time, no extensions granted",
+  "when the streetlights come on",
+  "on receipt of a better idea",
+  "at the end of the current playlist",
+  "when the phone next lights up",
+  "when someone else enters the room",
+  "on the next occasion of standing upright",
+  "when the fridge stops humming",
+  "at the first sound of rain on the window",
+  "when the light in the hall is switched on",
+  "immediately, retroactively, and without right of appeal",
+  "at the earlier of dusk and the seventh minute",
+  "when the chair becomes comfortable",
+  "on closure of the browser tab",
+  "on the fourth reconsideration",
+  "at the sound of post landing on the mat",
+  "when the building next settles",
+  "two (2) further items, then void",
+  "at the top of the hour, or sooner, at the Bureau's discretion",
+  "upon the pigeon vacating the sill",
+  "at the conclusion of the current thought, and no later",
+  "on the next unexplained noise from the boiler",
+  "on observation by any third party",
+  "when the clock is next looked at",
+  "seven (7) minutes, or one (1) interruption, whichever lands first",
+  "at the close of the current weather",
+  "on the arrival of any thought concerning dinner",
+  "when the cat requires something",
+  "at the close of business, wherever business is being conducted",
+  "on issue of any subsequent ordinance",
+  "twelve (12) minutes, extensions having been considered and refused",
+  "when the tea reaches room temperature",
+  "at the second visit to the kitchen",
+  "when the traffic outside next stops",
+  "on the next occasion of the window being opened",
+  "when the bin lorry has passed",
+  "upon the next unexplained draught in the room",
+  "on lapse of the current parking, if any",
+];
+
+const TITLES = [
+  "MUNICIPAL ORDINANCE",
+  "NOTICE OF LIMITATION",
+  "CERTIFICATE OF SUFFICIENCY",
+  "STATUTORY INSTRUMENT (SMALL TASKS) (LIMITATION)",
+  "WRIT OF MAXIMUM PERMITTED EFFORT",
+  "BYELAW CONCERNING DOMESTIC OVERREACH",
+  "CONSOLIDATED CEILING ORDER",
+  "SCHEDULE OF PERMITTED EXERTION",
+  "PROVISIONAL LICENCE TO BEGIN",
+  "DECLARATION OF UPPER BOUND",
+  "ORDINANCE ON THE OUTER LIMIT OF THE REASONABLE",
+];
+
+const BADGES = [
+  "Issued under the Sufficiency Act",
+  "Copy 2 of 3",
+  "Department of Upper Limits",
+  "Office of the Registrar of Enough",
+  "Effective immediately upon reading",
+  "Prepared by the Small Tasks Division",
+  "Subject to the Ceilings and Caps Regulations",
+  "Countersigned by an officer since transferred",
+  "Reference number withheld pending review",
+  "Not valid in any jurisdiction that asks for more",
+  "Second Schedule applies",
+  "Ceiling calculated by a method no longer in use",
+];
+
+const STAMPS = [
+  "CAPPED",
+  "ENOUGH",
+  "SUFFICIENT",
+  "CEILING IMPOSED",
+  "NO FURTHER",
+  "QUOTA MET",
+  "DULY PARTIAL",
+  "EXCESS DENIED",
+  "FILED AND CAPPED",
+  "WITHIN TOLERANCE",
+  "BALANCE FORFEIT",
+];
+
+const FOOTERS = [
+  "Objections may be lodged with nobody.",
+  "This document is valid without signature.",
+  "Retain for your records. Do not retain for your records.",
+  "Effort beyond the stated ceiling is unenforceable and will be disregarded.",
+  "The Bureau does not accept completed work.",
+  "Objections may be lodged in writing once the ceiling has expired.",
+  "This notice supersedes all lists, whether written down or merely remembered.",
+  "Issued in triplicate. Two copies have been mislaid, as is customary.",
+  "Compliance is presumed. Do not write in to confirm.",
+  "Photocopies of this notice carry the same authority and the same expiry.",
+  "Failure to receive this notice does not excuse the Subject from stopping.",
+  "No right of appeal attaches to a ceiling.",
+  "The remainder is the property of the state and may not be collected.",
+];
+
+/* ------------------------------------------------------------ the parse -- */
+
+/* People type the task with the guilt already attached. Take it off first. */
+const PREAMBLE = new RegExp('^\\s*(?:' + [
+  "i (?:really |finally |probably )?(?:need|have|ought|want|should|must|got)(?: to)? ",
+  "i'?m supposed to ", "i keep meaning to ",
+  "need to ", "have to ", "got to ", "gotta ", "ought to ", "supposed to ",
+  "remember to ", "don'?t forget to ",
+  "to ?do:? ", "todo:? ", "task:? ", "chore:? ",
+  // the hedges, which come in any order and any number
+  "really ", "just ", "actually ", "finally ", "probably ", "honestly ",
+  "maybe ", "somehow ", "definitely ", "urgently ", "please ", "still ",
+].join('|') + ')', 'i');
+
+const VERBS = new Set(('clean write do sort answer fold wash organise organize call plan read reply tidy ' +
+  'unpack file email cook prep water vacuum hoover mow sweep edit review study practice practise declutter ' +
+  'purge scan shred budget pay finish start make fix repair paint sand build assemble deal sort pack ' +
+  'wrap post send book schedule book renew cancel return donate list photograph label archive back ' +
+  'update rewrite draft outline research check test run install move shift clear empty fill dust polish ' +
+  'iron hang mend stitch weed prune plant harvest walk feed groom bath brush train').split(' '));
+
+const EXAMPLES = ['clean the garage', 'answer the emails', 'sort the board game shelf', 'deal with the pile on the chair', 'reply to that message'];
+
+function normalise(raw) {
+  let t = (raw || '').trim().replace(/[.!]+$/, '');
+  let prev;
+  do { prev = t; t = t.replace(PREAMBLE, ''); } while (t !== prev);   // "i really need to just clean..."
+  return t.trim();
+}
+
+const isVerbPhrase = t => VERBS.has(t.split(/\s+/)[0].toLowerCase().replace(/[^a-z]/g, ''));
+
+/* ------------------------------------------------------------- assembly -- */
+
+const rnd = a => a[(Math.random() * a.length) | 0];
+const int = (lo, hi) => lo + ((Math.random() * (hi - lo + 1)) | 0);
+
+// don't hand back the same wording twice in a row
+const last = {};
+function fresh(pool, key, n) {
+  if (n) {
+    const out = [];
+    while (out.length < n) { const v = fresh(pool, key); if (!out.includes(v)) out.push(v); }
+    return out;
+  }
+  let v = rnd(pool);
+  for (let i = 0; i < 6 && v === last[key]; i++) v = rnd(pool);
+  last[key] = v;
+  return v;
+}
+
+const OPERATIVE = {
+  // a verb phrase, measured in time
+  'verb.time': [
+    (t, c) => `The Subject <strong>MAY</strong> ${t} for a period <em>not exceeding ${c}</em>.`,
+    (t, c) => `Permission is granted to ${t} for <em>no longer than ${c}</em>, and no longer.`,
+    (t, c) => `The Subject <strong>SHALL</strong> ${t} for <em>no more than ${c}</em>, and shall then desist.`,
+  ],
+  // a verb phrase, measured in stuff
+  'verb.qty': [
+    (t, c) => `The Subject <strong>MAY</strong> ${t}, to a maximum of <em>${c}</em>.`,
+    (t, c) => `Permission is granted to ${t} to the extent of <em>${c}</em>, and no further.`,
+    (t, c) => `The Subject <strong>SHALL</strong> ${t} no more than <em>${c}</em>, and shall then desist.`,
+  ],
+  // anything else the box was handed
+  'any.time': [
+    (t, c) => `Activity in the matter above <strong>SHALL NOT EXCEED</strong> <em>${c}</em>.`,
+    (t, c) => `The above is hereby capped at <em>${c}</em>.`,
+  ],
+  'any.qty': [
+    (t, c) => `In the matter above, the Subject is permitted <em>not more than ${c}</em>.`,
+    (t, c) => `The above is hereby capped at <em>${c}</em>.`,
+  ],
+};
+
+const MONTHS = 'January February March April May June July August September October November December'.split(' ');
+
+function issue(task) {
+  const timed = Math.random() < .5;
+  const c = fresh(timed ? DURATIONS : QUANTITIES, 'ceiling');
+  const line = rnd(OPERATIVE[(isVerbPhrase(task) ? 'verb' : 'any') + (timed ? '.time' : '.qty')]);
+  const clauses = fresh(CLAUSES, 'clause', 2);
+  const sec = int(2, 19), sub = int(1, 9);
+  const d = new Date();
+
+  doc.innerHTML = `
+    <div class="masthead">
+      <span>${fresh(TITLES, 'title')} &nbsp;·&nbsp; § ${sec}.${sub}</span>
+      <span>${fresh(BADGES, 'badge')}</span>
+    </div>
+    <hr class="rule">
+    <div class="matter">In the matter of<b>${esc(task)}</b></div>
+
+    <p class="operative">${line(esc(task), c)}</p>
+
+    <dl>
+      <dt>Enforcement</dt><dd>${fresh(AGENCIES, 'agency')}</dd>
+      <dt>On exceedance</dt><dd>${fresh(PENALTIES, 'penalty')}</dd>
+      <dt>Expires</dt><dd>${fresh(EXPIRIES, 'expiry')}</dd>
+    </dl>
+
+    <hr class="rule thin">
+    <ul class="clauses">
+      <li><span class="n">§ ${sec}.${sub}(a)</span><span>${clauses[0]}</span></li>
+      <li><span class="n">§ ${sec}.${sub}(b)</span><span>${clauses[1]}</span></li>
+    </ul>
+
+    <div class="foot">
+      <span>Issued this ${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}</span>
+      <span>${fresh(FOOTERS, 'footer')}</span>
+      <div class="stamp">${fresh(STAMPS, 'stamp')}</div>
+    </div>`;
+
+  doc.hidden = after.hidden = false;
+  doc.style.animation = 'none'; doc.offsetHeight; doc.style.animation = '';
+}
+
+const esc = s => s.replace(/[&<>"]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m]));
+
+/* ------------------------------------------------------------- the desk -- */
+
+let current = '';
+
+f.onsubmit = e => {
+  e.preventDefault();
+  current = normalise(task.value) || rnd(EXAMPLES);
+  task.value = '';
+  task.placeholder = rnd(EXAMPLES);
+  issue(current);
+};
+
+amend.onclick = () => { if (current) issue(current); };
+</script>
+</body>
+</html>
