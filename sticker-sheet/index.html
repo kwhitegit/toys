@@ -30,32 +30,25 @@
   }
 
   /* ---- the backing sheet ---- */
-  /* Not one sheet but a pad of them: each theme gets its own paper, so the
-     colour under the stickers changes with the band. The flap is translated
-     well outside its cell before it is clipped back in, so this has to clip or
-     the page grows a phantom 150px to the right. */
+  /* One sheet, one theme, chosen on load — a refresh deals a different sheet.
+     The flap is translated well outside its cell before it is clipped back in,
+     so this has to clip or the page grows a phantom 150px to the right. */
   #sheet {
     margin: 0 auto;
+    padding: 34px var(--gap) 120px;
     max-width: calc(9 * (var(--s) + var(--gap)));
     min-height: 100vh;
     overflow: clip;
-    background: var(--sheet);
-    box-shadow: 0 0 0 1px var(--sheet-line), 0 22px 60px rgba(0,0,0,.55);
-  }
-
-  .band {
     display: grid;
     grid-template-columns: repeat(auto-fill, var(--s));
     justify-content: center;
     gap: var(--gap);
-    padding: var(--gap);
     background:
       repeating-linear-gradient(0deg, transparent 0 3px, rgba(0,0,0,.014) 3px 4px),
-      linear-gradient(180deg, rgba(255,255,255,.35), rgba(255,255,255,0) 40%),
-      var(--paper);
+      linear-gradient(180deg, rgba(255,255,255,.4), rgba(255,255,255,0) 22%),
+      var(--paper, var(--sheet));
+    box-shadow: 0 0 0 1px var(--sheet-line), 0 22px 60px rgba(0,0,0,.55);
   }
-  /* where one sheet lies on the next */
-  .band + .band { box-shadow: inset 0 1px 0 rgba(86,72,44,.20), inset 0 7px 12px -7px rgba(86,72,44,.35); }
 
   .cell { position: relative; width: var(--s); height: var(--s); }
 
@@ -154,10 +147,9 @@
 <script>
 /* ---------------------------------------------------------------- art ---- */
 
-/* A theme is a pool of glyphs and the palette they sit on. The sheet travels
-   through the themes in bands as you scroll, and a band lasts BAND stickers per
-   glyph in the pool, so a shallow theme is a short visit rather than a
-   repetitive one. */
+/* A theme is a pool of glyphs, the palette they sit on, and the colour of the
+   paper behind them. One is dealt per page load and the whole sheet is that
+   theme, so a refresh is a new sheet. */
 const THEMES = {
   space: {
     paper: '#e6e3f4',
@@ -191,8 +183,6 @@ const THEMES = {
   },
 };
 
-const BAND  = 1.6;   // stickers drawn per glyph in the pool, before the theme changes
-const FLOOR = 36;    // ...but no band is over before you have noticed it
 const RADII = ['50%', '26%', '14%', '38%'];
 
 const rnd = a => a[(Math.random() * a.length) | 0];
@@ -200,7 +190,7 @@ const rnd = a => a[(Math.random() * a.length) | 0];
 /* Pure random draw clusters — two identical stickers side by side read as a
    printing fault rather than as chance. Remember the last few of each kind and
    draw again if we land on one. */
-const seen = { glyph: [], col: [], theme: [] };
+const seen = { glyph: [], col: [] };
 
 function pick(pool, kind, span) {
   const mem = seen[kind];
@@ -242,35 +232,14 @@ function makeCell(theme) {
 const sheet = document.getElementById('sheet');
 const loose = document.getElementById('loose');
 
-let band = '', bandLeft = 0, bandEl = null;
-
-const px = name => parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name));
-
-function nextBand() {
-  // avoid the last two themes, not just the last one, or the sheet alternates
-  band = pick(Object.keys(THEMES), 'theme', 2);
-
-  bandEl = document.createElement('div');
-  bandEl.className = 'band';
-  bandEl.style.setProperty('--paper', THEMES[band].paper);
-  sheet.appendChild(bandEl);
-
-  // round up to whole rows, so a sheet of paper is a rectangle rather than an
-  // L-shape with the colour changing halfway along a row
-  const s = px('--s'), gap = px('--gap');
-  const cols = Math.max(1, Math.floor((bandEl.clientWidth - gap) / (s + gap)));
-  const want = Math.max(FLOOR, Math.round(THEMES[band].glyphs.length * BAND));
-  bandLeft = Math.ceil(want / cols) * cols;
-
-  seen.glyph.length = seen.col.length = 0;   // fresh sheet, but themes keep their memory
-}
+/* One theme for the whole sheet, dealt on load. Refresh for another. */
+const theme = rnd(Object.keys(THEMES));
+sheet.style.setProperty('--paper', THEMES[theme].paper);
 
 function grow(n) {
-  for (let i = 0; i < n; i++) {
-    if (bandLeft <= 0) nextBand();
-    bandLeft--;
-    bandEl.appendChild(makeCell(band));
-  }
+  const frag = document.createDocumentFragment();
+  for (let i = 0; i < n; i++) frag.appendChild(makeCell(theme));
+  sheet.appendChild(frag);
 }
 grow(120);
 
