@@ -58,7 +58,9 @@
 </main>
 
 <script>
-/* Add a toy: drop its folder in beside this file, add one line here. */
+/* Add a toy: drop its folder in beside this file, then append one entry to the
+   BOTTOM of this list. The page renders it newest first, so appending is the
+   whole job and the new toy always lands at the top of the page. */
 const TOYS = [
   {
     path: 'spirograph/',
@@ -98,7 +100,7 @@ const TOYS = [
   },
 ];
 
-document.getElementById('list').innerHTML = TOYS.map(t => `
+document.getElementById('list').innerHTML = TOYS.slice().reverse().map(t => `
   <li><a class="toy" href="${t.path}">
     <div class="row"><span class="name">${t.name}</span><span class="shape">${t.shape}</span></div>
     <p class="what">${t.what}</p>
