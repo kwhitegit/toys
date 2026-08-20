@@ -1,0 +1,909 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Box Stack</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='5' y='19' width='22' height='8' rx='1' fill='%23c2703f'/><rect x='8' y='11' width='16' height='7' rx='1' fill='%234e8f86'/><rect x='11' y='4' width='12' height='6' rx='1' fill='%23a8465a' transform='rotate(-7 17 7)'/></svg>">
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #17130f; }
+  body { font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: default; }
+  canvas.can-grab { cursor: grab; }
+  canvas.holding { cursor: grabbing; }
+  .hud {
+    position: fixed; left: 14px; bottom: 12px; display: flex; gap: 10px; align-items: center;
+    color: #e0d3bd; opacity: .55; user-select: none;
+  }
+  .hud button {
+    font: inherit; color: inherit; background: rgba(255,255,255,.07);
+    border: 1px solid rgba(255,255,255,.14); border-radius: 6px; padding: 3px 9px; cursor: pointer;
+  }
+  .hud button:hover { background: rgba(255,255,255,.14); }
+  .hint { position: fixed; right: 14px; bottom: 12px; color: #e0d3bd; opacity: .36; user-select: none; text-align: right; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div class="hud">
+  <button id="reshelve">Reshelve</button>
+</div>
+<div class="hint">drag a box off the shelf &middot; wheel tilts what you are holding</div>
+
+<script>
+/* ------------------------------------------------------------------ *
+ * Box Stack — a toy. Pull board game boxes off the shelf, stack them,
+ * watch the tower lean until it does not.
+ *
+ * The physics is a small 2D rigid body solver in the box2d-lite shape:
+ * SAT for oriented boxes, face clipping for the contact manifold, then
+ * sequential impulses with accumulated (warm started) normal impulses.
+ * Accumulation is what makes a stack of eight actually hold still.
+ * ------------------------------------------------------------------ */
+
+/* ---------------------------- vector math ------------------------- */
+
+const V = (x, y) => ({ x, y });
+const add = (a, b) => V(a.x + b.x, a.y + b.y);
+const sub = (a, b) => V(a.x - b.x, a.y - b.y);
+const mul = (a, s) => V(a.x * s, a.y * s);
+const neg = (a) => V(-a.x, -a.y);
+const dot = (a, b) => a.x * b.x + a.y * b.y;
+const absV = (a) => V(Math.abs(a.x), Math.abs(a.y));
+const len = (a) => Math.hypot(a.x, a.y);
+
+// Cross products, kept as one consistent set so handedness never matters.
+const crossVV = (a, b) => a.x * b.y - a.y * b.x;
+const crossVS = (a, s) => V(s * a.y, -s * a.x);
+const crossSV = (s, a) => V(-s * a.y, s * a.x);
+
+// Mat22 stored as two columns.
+const matFromAngle = (a) => {
+  const c = Math.cos(a), s = Math.sin(a);
+  return { c1: V(c, s), c2: V(-s, c) };
+};
+const mulMV = (m, v) => V(m.c1.x * v.x + m.c2.x * v.y, m.c1.y * v.x + m.c2.y * v.y);
+const mulMM = (a, b) => ({ c1: mulMV(a, b.c1), c2: mulMV(a, b.c2) });
+const transpose = (m) => ({ c1: V(m.c1.x, m.c2.x), c2: V(m.c1.y, m.c2.y) });
+const absM = (m) => ({ c1: absV(m.c1), c2: absV(m.c2) });
+
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+/* ------------------------------- body ----------------------------- */
+
+let nextId = 1;
+
+class Body {
+  constructor(w, h, mass) {
+    this.id = nextId++;
+    this.w = w; this.h = h;
+    this.pos = V(0, 0);
+    this.angle = 0;
+    this.vel = V(0, 0);
+    this.angVel = 0;
+    this.friction = 0.42;
+    this.setMass(mass);
+    this.idle = 0;
+  }
+  setMass(mass) {
+    this.mass = mass;
+    if (mass === Infinity) {
+      this.invMass = 0; this.I = Infinity; this.invI = 0;
+    } else {
+      this.invMass = 1 / mass;
+      this.I = mass * (this.w * this.w + this.h * this.h) / 12;
+      this.invI = 1 / this.I;
+    }
+  }
+  contains(p) {
+    const d = sub(p, this.pos);
+    const c = Math.cos(this.angle), s = Math.sin(this.angle);
+    return Math.abs(d.x * c + d.y * s) <= this.w / 2 &&
+           Math.abs(-d.x * s + d.y * c) <= this.h / 2;
+  }
+}
+
+/* ----------------------------- collision -------------------------- */
+
+const NO_EDGE = 0, EDGE1 = 1, EDGE2 = 2, EDGE3 = 3, EDGE4 = 4;
+const FACE_A_X = 0, FACE_A_Y = 1, FACE_B_X = 2, FACE_B_Y = 3;
+
+const fpKey = (f) => (f.in1 << 24) | (f.in2 << 16) | (f.out1 << 8) | f.out2;
+const flipFeature = (f) => {
+  let t = f.in1; f.in1 = f.in2; f.in2 = t;
+  t = f.out1; f.out1 = f.out2; f.out2 = t;
+};
+
+function clipSegmentToLine(vIn, normal, offset, clipEdge) {
+  const out = [];
+  const d0 = dot(normal, vIn[0].v) - offset;
+  const d1 = dot(normal, vIn[1].v) - offset;
+  if (d0 <= 0) out.push({ v: vIn[0].v, f: { ...vIn[0].f } });
+  if (d1 <= 0) out.push({ v: vIn[1].v, f: { ...vIn[1].f } });
+  if (d0 * d1 < 0) {
+    const interp = d0 / (d0 - d1);
+    const v = add(vIn[0].v, mul(sub(vIn[1].v, vIn[0].v), interp));
+    const f = { ...vIn[0].f };
+    if (d0 > 0) { f.in1 = clipEdge; f.in2 = NO_EDGE; }
+    else { f.out1 = clipEdge; f.out2 = NO_EDGE; }
+    out.push({ v, f });
+  }
+  return out;
+}
+
+// The two vertices of the face on the incident box most opposed to `normal`.
+function incidentEdge(h, pos, Rot, normal) {
+  const n = neg(mulMV(transpose(Rot), normal));
+  const nA = absV(n);
+  let a, b, fa, fb;
+  if (nA.x > nA.y) {
+    if (n.x > 0) {
+      a = V(h.x, -h.y); fa = { in2: EDGE3, out2: EDGE4 };
+      b = V(h.x,  h.y); fb = { in2: EDGE4, out2: EDGE1 };
+    } else {
+      a = V(-h.x,  h.y); fa = { in2: EDGE1, out2: EDGE2 };
+      b = V(-h.x, -h.y); fb = { in2: EDGE2, out2: EDGE3 };
+    }
+  } else {
+    if (n.y > 0) {
+      a = V( h.x, h.y); fa = { in2: EDGE4, out2: EDGE1 };
+      b = V(-h.x, h.y); fb = { in2: EDGE1, out2: EDGE2 };
+    } else {
+      a = V(-h.x, -h.y); fa = { in2: EDGE2, out2: EDGE3 };
+      b = V( h.x, -h.y); fb = { in2: EDGE3, out2: EDGE4 };
+    }
+  }
+  return [
+    { v: add(pos, mulMV(Rot, a)), f: { in1: NO_EDGE, in2: fa.in2, out1: NO_EDGE, out2: fa.out2 } },
+    { v: add(pos, mulMV(Rot, b)), f: { in1: NO_EDGE, in2: fb.in2, out1: NO_EDGE, out2: fb.out2 } },
+  ];
+}
+
+function collide(A, B) {
+  const hA = V(A.w / 2, A.h / 2), hB = V(B.w / 2, B.h / 2);
+  const RotA = matFromAngle(A.angle), RotB = matFromAngle(B.angle);
+  const RotAT = transpose(RotA), RotBT = transpose(RotB);
+
+  const dp = sub(B.pos, A.pos);
+  const dA = mulMV(RotAT, dp);
+  const dB = mulMV(RotBT, dp);
+  const C = mulMM(RotAT, RotB);
+  const aC = absM(C), aCT = transpose(aC);
+
+  const faceA = sub(sub(absV(dA), hA), mulMV(aC, hB));
+  if (faceA.x > 0 || faceA.y > 0) return null;
+  const faceB = sub(sub(absV(dB), mulMV(aCT, hA)), hB);
+  if (faceB.x > 0 || faceB.y > 0) return null;
+
+  // Deepest axis wins, with a bias toward keeping the previous kind of axis.
+  const relTol = 0.95, absTol = 0.01;
+  let axis = FACE_A_X, separation = faceA.x;
+  let normal = dA.x > 0 ? RotA.c1 : neg(RotA.c1);
+  if (faceA.y > relTol * separation + absTol * hA.y) {
+    axis = FACE_A_Y; separation = faceA.y;
+    normal = dA.y > 0 ? RotA.c2 : neg(RotA.c2);
+  }
+  if (faceB.x > relTol * separation + absTol * hB.x) {
+    axis = FACE_B_X; separation = faceB.x;
+    normal = dB.x > 0 ? RotB.c1 : neg(RotB.c1);
+  }
+  if (faceB.y > relTol * separation + absTol * hB.y) {
+    axis = FACE_B_Y; separation = faceB.y;
+    normal = dB.y > 0 ? RotB.c2 : neg(RotB.c2);
+  }
+
+  let frontNormal, sideNormal, front, negSide, posSide, negEdge, posEdge, incident;
+  if (axis === FACE_A_X || axis === FACE_A_Y) {
+    frontNormal = normal;
+    if (axis === FACE_A_X) {
+      front = dot(A.pos, frontNormal) + hA.x;
+      sideNormal = RotA.c2;
+      const side = dot(A.pos, sideNormal);
+      negSide = -side + hA.y; posSide = side + hA.y;
+      negEdge = EDGE3; posEdge = EDGE1;
+    } else {
+      front = dot(A.pos, frontNormal) + hA.y;
+      sideNormal = RotA.c1;
+      const side = dot(A.pos, sideNormal);
+      negSide = -side + hA.x; posSide = side + hA.x;
+      negEdge = EDGE2; posEdge = EDGE4;
+    }
+    incident = incidentEdge(hB, B.pos, RotB, frontNormal);
+  } else {
+    frontNormal = neg(normal);
+    if (axis === FACE_B_X) {
+      front = dot(B.pos, frontNormal) + hB.x;
+      sideNormal = RotB.c2;
+      const side = dot(B.pos, sideNormal);
+      negSide = -side + hB.y; posSide = side + hB.y;
+      negEdge = EDGE3; posEdge = EDGE1;
+    } else {
+      front = dot(B.pos, frontNormal) + hB.y;
+      sideNormal = RotB.c1;
+      const side = dot(B.pos, sideNormal);
+      negSide = -side + hB.x; posSide = side + hB.x;
+      negEdge = EDGE2; posEdge = EDGE4;
+    }
+    incident = incidentEdge(hA, A.pos, RotA, frontNormal);
+  }
+
+  let cp = clipSegmentToLine(incident, neg(sideNormal), negSide, negEdge);
+  if (cp.length < 2) return null;
+  cp = clipSegmentToLine(cp, sideNormal, posSide, posEdge);
+  if (cp.length < 2) return null;
+
+  const contacts = [];
+  for (const p of cp) {
+    const sep = dot(frontNormal, p.v) - front;
+    if (sep <= 0) {
+      const f = p.f;
+      if (axis === FACE_B_X || axis === FACE_B_Y) flipFeature(f);
+      contacts.push({
+        position: sub(p.v, mul(frontNormal, sep)),
+        normal, separation: sep, feature: fpKey(f),
+        Pn: 0, Pt: 0, massNormal: 0, massTangent: 0, bias: 0,
+      });
+    }
+  }
+  return contacts.length ? contacts : null;
+}
+
+/* ------------------------------ arbiter --------------------------- */
+
+const ALLOWED_PENETRATION = 0.004;   // metres of overlap we simply forgive
+const BIAS_FACTOR = 0.22;            // how hard overlap is pushed back out
+const MAX_BIAS_VEL = 1.5;            // ...but never faster than this
+
+/* You can carry a held box straight through a stack, so deep overlap is a
+   normal thing here, not a solver failure. Capping the recovery speed turns
+   the release from a cannon shot into a firm shove. */
+
+class Arbiter {
+  constructor(a, b) {
+    if (a.id < b.id) { this.b1 = a; this.b2 = b; } else { this.b1 = b; this.b2 = a; }
+    this.contacts = [];
+    this.friction = Math.sqrt(this.b1.friction * this.b2.friction);
+  }
+  update(newContacts) {
+    // Carry accumulated impulses across frames for contacts that persist.
+    for (const nc of newContacts) {
+      const old = this.contacts.find(c => c.feature === nc.feature);
+      if (old) { nc.Pn = old.Pn; nc.Pt = old.Pt; }
+    }
+    this.contacts = newContacts;
+  }
+  preStep(invDt) {
+    const { b1, b2 } = this;
+    for (const c of this.contacts) {
+      const r1 = sub(c.position, b1.pos), r2 = sub(c.position, b2.pos);
+
+      const rn1 = dot(r1, c.normal), rn2 = dot(r2, c.normal);
+      let kN = b1.invMass + b2.invMass;
+      kN += b1.invI * (dot(r1, r1) - rn1 * rn1) + b2.invI * (dot(r2, r2) - rn2 * rn2);
+      c.massNormal = 1 / kN;
+
+      const tangent = crossVS(c.normal, 1);
+      const rt1 = dot(r1, tangent), rt2 = dot(r2, tangent);
+      let kT = b1.invMass + b2.invMass;
+      kT += b1.invI * (dot(r1, r1) - rt1 * rt1) + b2.invI * (dot(r2, r2) - rt2 * rt2);
+      c.massTangent = 1 / kT;
+
+      c.bias = Math.min(MAX_BIAS_VEL,
+        -BIAS_FACTOR * invDt * Math.min(0, c.separation + ALLOWED_PENETRATION));
+
+      const P = add(mul(c.normal, c.Pn), mul(tangent, c.Pt));
+      b1.vel = sub(b1.vel, mul(P, b1.invMass));
+      b1.angVel -= b1.invI * crossVV(r1, P);
+      b2.vel = add(b2.vel, mul(P, b2.invMass));
+      b2.angVel += b2.invI * crossVV(r2, P);
+    }
+  }
+  applyImpulse() {
+    const { b1, b2 } = this;
+    for (const c of this.contacts) {
+      const r1 = sub(c.position, b1.pos), r2 = sub(c.position, b2.pos);
+
+      let dv = sub(add(b2.vel, crossSV(b2.angVel, r2)), add(b1.vel, crossSV(b1.angVel, r1)));
+      const vn = dot(dv, c.normal);
+      let dPn = c.massNormal * (-vn + c.bias);
+      const Pn0 = c.Pn;
+      c.Pn = Math.max(Pn0 + dPn, 0);
+      dPn = c.Pn - Pn0;
+      const Pn = mul(c.normal, dPn);
+      b1.vel = sub(b1.vel, mul(Pn, b1.invMass));
+      b1.angVel -= b1.invI * crossVV(r1, Pn);
+      b2.vel = add(b2.vel, mul(Pn, b2.invMass));
+      b2.angVel += b2.invI * crossVV(r2, Pn);
+
+      dv = sub(add(b2.vel, crossSV(b2.angVel, r2)), add(b1.vel, crossSV(b1.angVel, r1)));
+      const tangent = crossVS(c.normal, 1);
+      let dPt = c.massTangent * -dot(dv, tangent);
+      const maxPt = this.friction * c.Pn;
+      const Pt0 = c.Pt;
+      c.Pt = clamp(Pt0 + dPt, -maxPt, maxPt);
+      dPt = c.Pt - Pt0;
+      const Pt = mul(tangent, dPt);
+      b1.vel = sub(b1.vel, mul(Pt, b1.invMass));
+      b1.angVel -= b1.invI * crossVV(r1, Pt);
+      b2.vel = add(b2.vel, mul(Pt, b2.invMass));
+      b2.angVel += b2.invI * crossVV(r2, Pt);
+    }
+  }
+}
+
+/* ------------------------------- world ---------------------------- */
+
+const GRAVITY = V(0, 11);
+const ITERATIONS = 10;
+
+const world = {
+  bodies: [],
+  arbiters: new Map(),
+
+  add(b) { this.bodies.push(b); return b; },
+
+  remove(b) {
+    this.bodies = this.bodies.filter(x => x !== b);
+    for (const [k, arb] of this.arbiters) {
+      if (arb.b1 === b || arb.b2 === b) this.arbiters.delete(k);
+    }
+  },
+
+  clear() { this.bodies = []; this.arbiters.clear(); },
+
+  step(dt) {
+    const invDt = dt > 0 ? 1 / dt : 0;
+
+    // Broadphase + narrowphase. Naive pairs: we never have more than ~20 boxes.
+    for (let i = 0; i < this.bodies.length; i++) {
+      const A = this.bodies[i];
+      for (let j = i + 1; j < this.bodies.length; j++) {
+        const B = this.bodies[j];
+        if (A.invMass === 0 && B.invMass === 0) continue;
+
+        const key = A.id < B.id ? A.id * 100000 + B.id : B.id * 100000 + A.id;
+        const contacts = collide(A, B);
+        if (!contacts) { this.arbiters.delete(key); continue; }
+
+        let arb = this.arbiters.get(key);
+        if (!arb) {
+          arb = new Arbiter(A, B);
+          onFirstTouch(arb, contacts[0]);
+          this.arbiters.set(key, arb);
+        }
+        arb.update(contacts);
+      }
+    }
+
+    for (const b of this.bodies) {
+      if (b.invMass === 0) continue;
+      b.vel = add(b.vel, mul(GRAVITY, dt));
+    }
+
+    for (const arb of this.arbiters.values()) arb.preStep(invDt);
+    for (let k = 0; k < ITERATIONS; k++) {
+      for (const arb of this.arbiters.values()) arb.applyImpulse();
+    }
+
+    for (const b of this.bodies) {
+      if (b.invMass === 0) continue;
+      b.pos = add(b.pos, mul(b.vel, dt));
+      b.angle += b.angVel * dt;
+
+      // Soft settling, so a resting stack stops shivering.
+      if (len(b.vel) < 0.025 && Math.abs(b.angVel) < 0.06) {
+        if (++b.idle > 40) { b.vel = V(0, 0); b.angVel = 0; }
+      } else b.idle = 0;
+    }
+  },
+};
+
+/* ------------------------------- audio ---------------------------- */
+
+let ac = null, noiseBuf = null, soundsThisFrame = 0;
+
+function audioCtx() {
+  if (!ac) {
+    ac = new (window.AudioContext || window.webkitAudioContext)();
+    const n = ac.sampleRate * 0.2;
+    noiseBuf = ac.createBuffer(1, n, ac.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+  }
+  if (ac.state === 'suspended') ac.resume();
+  return ac;
+}
+
+// Cardboard on cardboard: a filtered noise slap plus a short low body.
+function thunk(strength, pitch) {
+  if (soundsThisFrame > 5) return;
+  soundsThisFrame++;
+  const c = audioCtx(), t = c.currentTime;
+  const v = Math.min(0.42, 0.03 + strength * 0.11);
+
+  const g = c.createGain();
+  g.gain.setValueAtTime(v, t);
+  g.gain.exponentialRampToValueAtTime(0.0008, t + 0.13);
+  g.connect(c.destination);
+
+  const src = c.createBufferSource();
+  src.buffer = noiseBuf;
+  const bp = c.createBiquadFilter();
+  bp.type = 'bandpass'; bp.frequency.value = 430 * pitch; bp.Q.value = 0.8;
+  src.connect(bp); bp.connect(g);
+  src.start(t); src.stop(t + 0.15);
+
+  const o = c.createOscillator();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(155 * pitch, t);
+  o.frequency.exponentialRampToValueAtTime(58 * pitch, t + 0.09);
+  const og = c.createGain();
+  og.gain.setValueAtTime(v * 0.75, t);
+  og.gain.exponentialRampToValueAtTime(0.0008, t + 0.11);
+  o.connect(og); og.connect(c.destination);
+  o.start(t); o.stop(t + 0.12);
+}
+
+function onFirstTouch(arb, contact) {
+  const { b1, b2 } = arb;
+  const r1 = sub(contact.position, b1.pos), r2 = sub(contact.position, b2.pos);
+  const dv = sub(add(b2.vel, crossSV(b2.angVel, r2)), add(b1.vel, crossSV(b1.angVel, r1)));
+  const speed = Math.abs(dot(dv, contact.normal));
+  if (speed < 0.25) return;
+  const box = b1.game ? b1 : b2;
+  const size = box.game ? box.w * box.h : 0.06;
+  thunk(Math.min(1, speed / 3.4), clamp(0.055 / size, 0.7, 1.7));
+}
+
+/* ---------------------------- the catalogue ----------------------- */
+/* Widths and heights are metres. Depth is the spine you see on a shelf. */
+
+const CATALOG = [
+  { title: 'Marrowdeep',           w: 0.30, h: 0.30, d: 0.090, hue: '#7d2c3c', ink: '#f3e2cf', accent: '#d8a24a', layout: 2 },
+  { title: 'The Long Aqueduct',    w: 0.40, h: 0.27, d: 0.070, hue: '#2f6b74', ink: '#f0efe4', accent: '#e2c17a', layout: 1 },
+  { title: 'Bramblewick',          w: 0.26, h: 0.26, d: 0.060, hue: '#3d5c34', ink: '#f2ead6', accent: '#c9d07a', layout: 0 },
+  { title: 'Salt & Ledger',        w: 0.29, h: 0.29, d: 0.075, hue: '#22405e', ink: '#eef2f6', accent: '#8fb6d8', layout: 1 },
+  { title: 'Nine Sleeping Kings',  w: 0.22, h: 0.30, d: 0.055, hue: '#4a3468', ink: '#efe6f5', accent: '#c8a2e0', layout: 2 },
+  { title: 'Hexcrawl',             w: 0.30, h: 0.30, d: 0.085, hue: '#8a4a1c', ink: '#f7ead9', accent: '#f0b45c', layout: 0 },
+  { title: 'Tin Star Junction',    w: 0.36, h: 0.24, d: 0.060, hue: '#6b6033', ink: '#f6f0dc', accent: '#e8d488', layout: 1 },
+  { title: 'Cheese Barons',        w: 0.20, h: 0.20, d: 0.050, hue: '#c08a1e', ink: '#3a2c0c', accent: '#5c4410', layout: 0 },
+  { title: 'Wheelwright',          w: 0.26, h: 0.26, d: 0.065, hue: '#3a3f47', ink: '#e8ecf2', accent: '#9aa7b8', layout: 2 },
+  { title: 'The Fen',              w: 0.16, h: 0.22, d: 0.040, hue: '#294a42', ink: '#e2f0e8', accent: '#7fc0a4', layout: 0 },
+  { title: 'Ash & Ember',          w: 0.30, h: 0.22, d: 0.050, hue: '#912a22', ink: '#fbe8dc', accent: '#f0a05a', layout: 1 },
+  { title: 'Grand Duchy of Nettles', w: 0.29, h: 0.29, d: 0.080, hue: '#274d3a', ink: '#eef4e6', accent: '#b8cf82', layout: 2 },
+  { title: 'Otter Logistics',      w: 0.18, h: 0.12, d: 0.045, hue: '#a0562f', ink: '#fceee0', accent: '#f2c08a', layout: 0 },
+  { title: 'Vellum',               w: 0.12, h: 0.17, d: 0.035, hue: '#d9cba8', ink: '#4a3c22', accent: '#8a7442', layout: 0 },
+];
+
+const DENSITY = 200;   // kg per cubic metre-ish. Only the ratios matter.
+const SCALE = 300;     // pixels per metre
+
+/* ------------------------------ scene ----------------------------- */
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let W = 0, H = 0, DPR = 1;
+const SHELF_W = 196;   // pixels of shelf furniture down the left edge
+const FLOOR_H = 74;    // pixels of carpet at the bottom
+
+let shelf = [];        // catalogue entries still on the shelf, top of list = top of pile
+let floor = null, wallL = null, wallR = null;
+let held = null, heldOffset = V(0, 0);
+let pointer = V(0, 0), pointerPrev = V(0, 0), pointerVel = V(0, 0);
+let hoverIndex = -1;
+
+function resize() {
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  buildRoom();
+}
+
+function buildRoom() {
+  for (const b of [floor, wallL, wallR]) if (b) world.remove(b);
+
+  floor = new Body(W / SCALE * 3, 2, Infinity);
+  floor.pos = V(W / SCALE / 2, (H - FLOOR_H) / SCALE + 1);
+  floor.friction = 0.65;
+
+  wallL = new Body(2, H / SCALE * 3, Infinity);
+  wallL.pos = V(SHELF_W / SCALE - 1, H / SCALE / 2);
+
+  wallR = new Body(2, H / SCALE * 3, Infinity);
+  wallR.pos = V(W / SCALE + 1, H / SCALE / 2);
+
+  world.add(floor); world.add(wallL); world.add(wallR);
+}
+
+function reshelve() {
+  world.clear();
+  held = null;
+  shelf = CATALOG.slice();
+  buildRoom();
+}
+
+/* --------------------------- shelf layout ------------------------- */
+/* Boxes lie flat and stacked, the way a real collection actually sits,
+   so what you see on the shelf is a pile of spines. */
+
+function shelfSlots() {
+  const slots = [];
+  const pad = 18;
+  const maxW = SHELF_W - pad * 2;
+  let y = H - FLOOR_H - 16;
+  for (let i = shelf.length - 1; i >= 0; i--) {
+    const g = shelf[i];
+    const th = Math.max(13, g.d * SCALE * 2.4);
+    const bw = Math.min(maxW, g.w * SCALE * 0.62);
+    y -= th;
+    slots.push({ index: i, game: g, x: pad + (maxW - bw) / 2, y, w: bw, h: th });
+  }
+  return slots;
+}
+
+function spawnFromShelf(index) {
+  const g = shelf[index];
+  shelf.splice(index, 1);
+
+  const b = new Body(g.w, g.h, DENSITY * g.w * g.h * g.d);
+  b.game = g;
+  b.pos = V(pointer.x, pointer.y);
+  b.angle = 0;
+  b.friction = 0.44;
+  world.add(b);
+  return b;
+}
+
+/* ------------------------------ input ----------------------------- */
+
+const toWorld = (px, py) => V(px / SCALE, py / SCALE);
+
+function grabAt(px, py) {
+  // Anything already in the room, topmost first.
+  const p = toWorld(px, py);
+  for (let i = world.bodies.length - 1; i >= 0; i--) {
+    const b = world.bodies[i];
+    if (b.invMass === 0 && !b.game) continue;
+    if (b.contains(p)) return { body: b, offset: sub(b.pos, p) };
+  }
+  // Otherwise, off the shelf.
+  if (px < SHELF_W) {
+    for (const s of shelfSlots()) {
+      if (px >= s.x - 6 && px <= s.x + s.w + 6 && py >= s.y && py <= s.y + s.h) {
+        return { body: spawnFromShelf(s.index), offset: V(0, 0) };
+      }
+    }
+  }
+  return null;
+}
+
+function hold(body, offset) {
+  held = body;
+  heldOffset = offset;
+  body.savedMass = body.mass;
+  body.invMass = 0; body.invI = 0;
+  body.vel = V(0, 0); body.angVel = 0;
+  canvas.classList.add('holding');
+}
+
+function release() {
+  if (!held) return;
+  held.setMass(held.savedMass);
+  held.vel = V(clamp(pointerVel.x, -6, 6), clamp(pointerVel.y, -6, 6));
+  held.angVel = 0;
+  held.idle = 0;
+  held = null;
+  canvas.classList.remove('holding');
+}
+
+function moveHeld() {
+  if (!held) return;
+  const target = add(pointer, heldOffset);
+  // Keep the held box clear of the shelf furniture so it cannot be
+  // shoved inside the wall and then fired out on release.
+  const minX = SHELF_W / SCALE + Math.max(held.w, held.h) / 2 + 0.01;
+  const next = V(Math.max(minX, target.x), target.y);
+  held.vel = mul(sub(next, held.pos), 60);   // so contacts still push others
+  held.pos = next;
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* pen or synthetic pointer */ }
+  audioCtx();
+  pointer = toWorld(e.clientX, e.clientY);
+  pointerPrev = pointer;
+  const g = grabAt(e.clientX, e.clientY);
+  if (g) hold(g.body, g.offset);
+});
+
+canvas.addEventListener('pointermove', (e) => {
+  pointer = toWorld(e.clientX, e.clientY);
+  if (held) return;
+  // Hover feedback on the shelf.
+  hoverIndex = -1;
+  if (e.clientX < SHELF_W) {
+    for (const s of shelfSlots()) {
+      if (e.clientX >= s.x - 6 && e.clientX <= s.x + s.w + 6 && e.clientY >= s.y && e.clientY <= s.y + s.h) {
+        hoverIndex = s.index; break;
+      }
+    }
+  }
+  const overBox = hoverIndex >= 0 || world.bodies.some(b => b.game && b.contains(pointer));
+  canvas.classList.toggle('can-grab', overBox);
+});
+
+canvas.addEventListener('pointerup', release);
+canvas.addEventListener('pointercancel', release);
+
+canvas.addEventListener('wheel', (e) => {
+  if (!held) return;
+  e.preventDefault();
+  const step = (e.shiftKey ? 0.012 : 0.05) * Math.sign(e.deltaY);
+  held.angle += step;
+}, { passive: false });
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'r' || e.key === 'R') reshelve();
+});
+
+document.getElementById('reshelve').addEventListener('click', reshelve);
+window.addEventListener('resize', resize);
+
+/* ----------------------------- rendering -------------------------- */
+
+function roundRect(x, y, w, h, r) {
+  r = Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function shade(hex, amt) {
+  const n = parseInt(hex.slice(1), 16);
+  const f = (v) => clamp(Math.round(amt > 0 ? v + (255 - v) * amt : v * (1 + amt)), 0, 255);
+  return `rgb(${f((n >> 16) & 255)}, ${f((n >> 8) & 255)}, ${f(n & 255)})`;
+}
+
+const titleFont = (size) => `700 ${size}px ui-sans-serif, system-ui, "Segoe UI", sans-serif`;
+
+function wrapTwo(title, maxW) {
+  if (ctx.measureText(title).width <= maxW) return [title];
+  const words = title.split(' ');
+  let a = '', b = '';
+  for (const wd of words) {
+    const t = a ? a + ' ' + wd : wd;
+    if (ctx.measureText(t).width <= maxW || !a) a = t; else b = b ? b + ' ' + wd : wd;
+  }
+  return b ? [a, b] : [a];
+}
+
+// Wrap to at most two lines, then shrink until it genuinely fits the cover.
+// One long unbreakable word is the case that used to hang off the edge.
+function layoutTitle(title, maxW, maxH, startSize) {
+  let size = startSize;
+  let lines;
+  for (;;) {
+    ctx.font = titleFont(size);
+    lines = wrapTwo(title, maxW);
+    const widest = Math.max(...lines.map(l => ctx.measureText(l).width));
+    const tall = lines.length * size * 1.18;
+    if ((widest <= maxW && tall <= maxH) || size <= 5) break;
+    size -= 0.5;
+  }
+  return { lines, size, lineH: size * 1.18 };
+}
+
+function drawCover(g, w, h) {
+  // Drawn centred on the origin, in the box's own rotated space.
+  const grad = ctx.createLinearGradient(-w / 2, -h / 2, w / 2, h / 2);
+  grad.addColorStop(0, shade(g.hue, 0.14));
+  grad.addColorStop(1, shade(g.hue, -0.16));
+
+  roundRect(-w / 2, -h / 2, w, h, 3);
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // The lid rim: the little band of box side you always see from the front.
+  const rim = clamp(w * 0.075, 4, 11);
+  ctx.save();
+  ctx.clip();
+  ctx.fillStyle = shade(g.hue, -0.34);
+  ctx.fillRect(-w / 2, h / 2 - rim, w, rim);
+  ctx.fillStyle = 'rgba(255,255,255,.07)';
+  ctx.fillRect(-w / 2, -h / 2, w, Math.max(2, rim * 0.35));
+  ctx.restore();
+
+  // The printable face: inside the padding, and clear of the lid rim.
+  const pad = Math.min(w, h) * 0.11;
+  const inner = w - pad * 2;
+  const top = -h / 2 + pad;
+  const bottom = h / 2 - rim - pad * 0.5;
+  const faceH = bottom - top;
+
+  const { lines, size, lineH } = layoutTitle(
+    g.title.toUpperCase(), inner, faceH * 0.55,
+    clamp(Math.min(h * 0.15, w * 0.155), 6, 20));
+  const blockH = lines.length * lineH;
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = titleFont(size);
+
+  let baseY;
+  if (g.layout === 1) {
+    // Title in a band across the upper third.
+    const bandH = blockH + pad * 0.8;
+    baseY = top + bandH / 2;
+    ctx.fillStyle = 'rgba(0,0,0,.22)';
+    ctx.fillRect(-w / 2, baseY - bandH / 2, w, bandH);
+  } else if (g.layout === 2) {
+    // Emblem above, title sitting under it.
+    baseY = bottom - blockH / 2;
+    const emblemSpace = (baseY - blockH / 2) - top;
+    const r = Math.min(emblemSpace * 0.38, Math.min(w, h) * 0.17);
+    if (r > 3) {
+      const cy = top + emblemSpace / 2;
+      ctx.save();
+      ctx.strokeStyle = g.accent;
+      ctx.lineWidth = Math.max(1, w * 0.012);
+      ctx.beginPath(); ctx.arc(0, cy, r, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, cy - r * 0.55); ctx.lineTo(r * 0.55, cy);
+      ctx.lineTo(0, cy + r * 0.55); ctx.lineTo(-r * 0.55, cy);
+      ctx.closePath(); ctx.stroke();
+      ctx.restore();
+    }
+  } else {
+    // Centred, with a rule above and below.
+    baseY = top + faceH / 2;
+    const half = blockH / 2 + size * 0.45;
+    if (half < faceH / 2) {
+      ctx.strokeStyle = g.accent;
+      ctx.lineWidth = Math.max(1, w * 0.008);
+      for (const dy of [-half, half]) {
+        ctx.beginPath();
+        ctx.moveTo(-inner / 2, baseY + dy); ctx.lineTo(inner / 2, baseY + dy); ctx.stroke();
+      }
+    }
+  }
+
+  ctx.fillStyle = g.ink;
+  const startY = baseY - (blockH - lineH) / 2;
+  lines.forEach((ln, i) => ctx.fillText(ln, 0, startY + i * lineH));
+
+  ctx.strokeStyle = 'rgba(0,0,0,.55)';
+  ctx.lineWidth = 1;
+  roundRect(-w / 2 + 0.5, -h / 2 + 0.5, w - 1, h - 1, 3);
+  ctx.stroke();
+}
+
+function drawBody(b) {
+  if (!b.game) return;
+  const w = b.w * SCALE, h = b.h * SCALE;
+  ctx.save();
+  ctx.translate(b.pos.x * SCALE, b.pos.y * SCALE);
+  ctx.rotate(b.angle);
+  if (b === held) {
+    ctx.shadowColor = 'rgba(0,0,0,.55)';
+    ctx.shadowBlur = 26; ctx.shadowOffsetY = 12;
+  } else {
+    ctx.shadowColor = 'rgba(0,0,0,.35)';
+    ctx.shadowBlur = 8; ctx.shadowOffsetY = 3;
+  }
+  drawCover(b.game, w, h);
+  ctx.restore();
+}
+
+function drawRoom() {
+  const wall = ctx.createLinearGradient(0, 0, 0, H);
+  wall.addColorStop(0, '#211a15');
+  wall.addColorStop(1, '#16120e');
+  ctx.fillStyle = wall;
+  ctx.fillRect(0, 0, W, H);
+
+  // Carpet.
+  ctx.fillStyle = '#33241c';
+  ctx.fillRect(0, H - FLOOR_H, W, FLOOR_H);
+  ctx.fillStyle = 'rgba(255,255,255,.05)';
+  ctx.fillRect(0, H - FLOOR_H, W, 2);
+
+  // Shelf furniture.
+  ctx.fillStyle = '#241a14';
+  ctx.fillRect(0, 0, SHELF_W, H - FLOOR_H);
+  ctx.fillStyle = '#3a291e';
+  ctx.fillRect(SHELF_W - 9, 0, 9, H - FLOOR_H);
+  ctx.fillStyle = 'rgba(0,0,0,.45)';
+  ctx.fillRect(SHELF_W, 0, 16, H - FLOOR_H);
+
+  const slots = shelfSlots();
+  for (const s of slots) {
+    const g = s.game;
+    const lift = s.index === hoverIndex ? 10 : 0;
+    ctx.save();
+    ctx.translate(lift, 0);
+
+    ctx.fillStyle = shade(g.hue, s.index === hoverIndex ? 0.12 : -0.02);
+    roundRect(s.x, s.y, s.w, s.h - 1.5, 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,.08)';
+    ctx.fillRect(s.x, s.y, s.w, 1.5);
+    ctx.strokeStyle = 'rgba(0,0,0,.5)';
+    ctx.lineWidth = 1;
+    roundRect(s.x + 0.5, s.y + 0.5, s.w - 1, s.h - 2.5, 2);
+    ctx.stroke();
+
+    const fs = clamp(s.h * 0.52, 7, 11);
+    ctx.font = `600 ${fs}px ui-sans-serif, system-ui, "Segoe UI", sans-serif`;
+    ctx.fillStyle = g.ink;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    let t = g.title;
+    while (ctx.measureText(t).width > s.w - 14 && t.length > 3) t = t.slice(0, -1);
+    if (t !== g.title) t = t.slice(0, -1) + '…';
+    ctx.fillText(t, s.x + 7, s.y + s.h / 2);
+    ctx.restore();
+  }
+
+  if (!shelf.length) {
+    ctx.font = '12px ui-sans-serif, system-ui, "Segoe UI", sans-serif';
+    ctx.fillStyle = 'rgba(224,211,189,.3)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('shelf empty', SHELF_W / 2, H - FLOOR_H - 34);
+  }
+}
+
+/* ------------------------------- loop ----------------------------- */
+
+const FIXED = 1 / 120;
+let acc = 0, last = performance.now();
+
+function frame(now) {
+  const elapsed = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  soundsThisFrame = 0;
+
+  pointerVel = mul(sub(pointer, pointerPrev), 1 / Math.max(elapsed, 0.001));
+  pointerPrev = pointer;
+
+  acc += elapsed;
+  let steps = 0;
+  while (acc >= FIXED && steps < 5) {
+    moveHeld();
+    world.step(FIXED);
+    acc -= FIXED;
+    steps++;
+  }
+  if (steps === 5) acc = 0;
+
+  // Anything that somehow escapes the room goes back to the shelf.
+  for (const b of world.bodies.slice()) {
+    if (b.game && (b.pos.y * SCALE > H + 600 || b.pos.x * SCALE < -600 || b.pos.x * SCALE > W + 600)) {
+      if (b === held) release();
+      world.remove(b);
+      shelf.push(b.game);
+    }
+  }
+
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  drawRoom();
+  for (const b of world.bodies) drawBody(b);
+
+  requestAnimationFrame(frame);
+}
+
+resize();
+reshelve();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
