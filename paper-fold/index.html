@@ -247,43 +247,73 @@ function ac() {
   return AC;
 }
 
+const NOISE_SECS = 3;
+
 function noiseBuffer() {
   if (NOISE) return NOISE;
-  const a = ac(), n = a.sampleRate;
+  const a = ac(), n = a.sampleRate * NOISE_SECS;
   NOISE = a.createBuffer(1, n, a.sampleRate);
   const d = NOISE.getChannelData(0);
   for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
   return NOISE;
 }
 
-function burst({ dur = 0.08, f = 2000, q = 1, gain = 0.2, sweep = 0 }) {
+/* One noise burst, shaped.
+
+   The attack is the whole game. These first read as gunshots because the gain
+   went from silence to full in 6ms, so the entire sound arrived as one
+   transient; measured, it reached 100% of its peak inside the first 10ms.
+   Paper swells instead. Anything under about 20ms is a click no matter what
+   the filter is doing, so the folds ramp in over 75ms and the unfold over
+   130ms, and the highpass takes away the low-mid body that made the transient
+   read as a thump rather than a tick.
+
+   The generous buffer and the clamped start offset are only insurance, so a
+   longer cue added later cannot run the read head off the end of the noise
+   while the envelope is still up. */
+function burst({ dur = 0.08, f = 2000, q = 1, gain = 0.2, sweep = 0, attack = 0.004, hp = 600 }) {
   if (muted) return;
   try {
     const a = ac(), t = a.currentTime;
+    const rate = 0.85 + Math.random() * 0.35;
+
     const src = a.createBufferSource();
     src.buffer = noiseBuffer();
-    src.playbackRate.value = 0.8 + Math.random() * 0.5;
+    src.playbackRate.value = rate;
+
+    /* paper has no body down low, and the low end is what reads as a thump */
+    const cut = a.createBiquadFilter();
+    cut.type = 'highpass';
+    cut.frequency.value = hp;
+
     const flt = a.createBiquadFilter();
     flt.type = 'bandpass';
     flt.Q.value = q;
     flt.frequency.setValueAtTime(f, t);
-    if (sweep) flt.frequency.linearRampToValueAtTime(Math.max(140, f + sweep), t + dur);
+    if (sweep) flt.frequency.linearRampToValueAtTime(Math.max(200, f + sweep), t + dur);
+
     const g = a.createGain();
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(gain, t + 0.006);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(gain, t + attack);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    src.connect(flt); flt.connect(g); g.connect(a.destination);
-    src.start(t, Math.random() * 0.5);
-    src.stop(t + dur + 0.03);
+
+    src.connect(cut); cut.connect(flt); flt.connect(g); g.connect(a.destination);
+    /* leave room for the whole envelope at this playback rate, then some */
+    src.start(t, Math.random() * Math.max(0, NOISE_SECS - dur * rate - 0.2));
+    src.stop(t + dur + 0.05);
   } catch (e) { /* no audio, no problem */ }
 }
 
 const sfx = {
-  snip()   { burst({ dur: 0.05, f: 3400, q: 0.9, gain: 0.16 });
-             setTimeout(() => burst({ dur: 0.06, f: 2500, q: 1.2, gain: 0.13 }), 55); },
-  crease() { burst({ dur: 0.24, f: 950,  q: 0.6, gain: 0.13, sweep: 800 }); },
-  rustle() { burst({ dur: 0.55, f: 1700, q: 0.4, gain: 0.11, sweep: -1100 }); },
-  tick()   { burst({ dur: 0.04, f: 5200, q: 1.6, gain: 0.05 }); },
+  snip()   { burst({ dur: 0.05, f: 3400, q: 0.9, gain: 0.15, attack: 0.003, hp: 1400 });
+             setTimeout(() => burst({ dur: 0.06, f: 2600, q: 1.2, gain: 0.12, attack: 0.004, hp: 1200 }), 55); },
+  /* a thumb run along a crease: dry, high, and it arrives rather than hits */
+  crease() { burst({ dur: 0.34, f: 2100, q: 0.8, gain: 0.075, sweep: 1100, attack: 0.075, hp: 1100 }); },
+  /* the sheet settling open. Quieter each time, since one unfold plays four */
+  rustle(level = 1) {
+    burst({ dur: 0.6, f: 1900, q: 0.55, gain: 0.07 * level, sweep: -500, attack: 0.13, hp: 900 });
+  },
+  tick()   { burst({ dur: 0.04, f: 5200, q: 1.6, gain: 0.045, attack: 0.002, hp: 2000 }); },
 };
 
 /* ============================================================================
@@ -780,7 +810,7 @@ function frame(ts) {
         addCreases();
         retarget();
         sync();
-      } else sfx.rustle();
+      } else sfx.rustle(0.5);   /* the opening rustle already covers this */
     }
   }
 
