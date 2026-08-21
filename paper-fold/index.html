@@ -72,6 +72,7 @@
   button:active { transform: translateY(1px); }
   button.primary { border-color: var(--accent); color: var(--accent); }
   button.quiet { color: var(--dim); padding: 10px 13px; }
+  button.off { color: var(--ink); border-style: dashed; }
   button[hidden] { display: none; }
 </style>
 </head>
@@ -91,7 +92,9 @@
   <button id="bUnfold" class="primary">Unfold</button>
   <button id="bKeep">Keep it</button>
   <button id="bNew">New sheet</button>
-  <button id="bMute" class="quiet">Sound on</button>
+  <!-- labelled with what clicking does, not with what is currently true:
+       "Sound on" reads as an invitation to switch it on, and mutes it -->
+  <button id="bMute" class="quiet">Mute</button>
 </footer>
 
 <script>
@@ -966,7 +969,9 @@ els.unfold.onclick = () => { ac(); startUnfold(); };
 els.neu.onclick    = () => { ac(); reset(); };
 els.mute.onclick   = () => {
   muted = !muted;
-  els.mute.textContent = muted ? 'Sound off' : 'Sound on';
+  els.mute.textContent = muted ? 'Unmute' : 'Mute';
+  els.mute.classList.toggle('off', muted);
+  if (!muted) sfx.crease();          /* so unmuting proves itself */
 };
 els.keep.onclick = () => {
   const E = 1400, k = E / P;
