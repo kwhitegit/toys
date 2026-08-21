@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Minor Constellations</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><path d='M7 24 L13 9 L22 14 L26 6' stroke='%23445070' stroke-width='1.4' fill='none'/><circle cx='7' cy='24' r='2' fill='%23e6c98a'/><circle cx='13' cy='9' r='2.8' fill='%23fff6e2'/><circle cx='22' cy='14' r='2' fill='%23e6c98a'/><circle cx='26' cy='6' r='1.5' fill='%23bcd0ff'/></svg>">
+<style>
+  :root {
+    --bg: #0b0d12;
+    --panel: #141821;
+    --line: #262c3a;
+    --ink: #e8ecf5;
+    --dim: #7c8598;
+    --gold: #e6c98a;
+    --sky-1: #0d1220;
+    --sky-2: #070a11;
+  }
+  * { box-sizing: border-box; }
+  html, body { min-height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.55 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 34px 18px 90px;
+  }
+
+  h1 {
+    font: 600 15px/1 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: .22em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin: 0 0 20px;
+  }
+
+  form { display: flex; gap: 8px; width: min(720px, 100%); }
+  input {
+    flex: 1;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--ink);
+    font: 16px/1 ui-sans-serif, system-ui, sans-serif;
+    padding: 13px 14px;
+    min-width: 0;
+  }
+  input:focus { outline: none; border-color: #3d4658; }
+  input::placeholder { color: #4d5568; }
+  button {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--ink);
+    font: 600 12px/1 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: .14em;
+    padding: 0 18px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  button:hover { border-color: #46506a; }
+
+  /* ---- the plate ---- */
+  .plate {
+    width: min(720px, 100%);
+    margin-top: 26px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    overflow: hidden;
+    background: var(--panel);
+    display: none;
+  }
+  .plate.on { display: block; animation: rise .5s ease both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } }
+
+  .sky {
+    display: block;
+    width: 100%;
+    background: radial-gradient(120% 90% at 50% 8%, var(--sky-1), var(--sky-2) 70%);
+    border-bottom: 1px solid var(--line);
+  }
+  .field circle { fill: #cfd8ef; animation: twinkle 4s ease-in-out infinite; }
+  @keyframes twinkle { 0%, 100% { opacity: .30; } 50% { opacity: .85; } }
+
+  .links path {
+    fill: none;
+    stroke: #4a5878;
+    stroke-width: .28;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    animation: draw 1.5s ease .35s forwards;
+  }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+
+  .stars g { animation: pop .7s cubic-bezier(.2, 1.5, .4, 1) both; }
+  @keyframes pop { from { opacity: 0; transform: scale(.2); } }
+  .stars circle { fill: #fff8ea; }
+  .stars .halo { fill: url(#glow); }
+  .stars text {
+    fill: var(--gold);
+    opacity: .8;
+    font: italic 1.9px/1 Georgia, "Times New Roman", serif;
+  }
+
+  /* ---- the placard ---- */
+  .card { padding: 22px 26px 26px; }
+  .kicker {
+    font: 600 10px/1 ui-monospace, Consolas, monospace;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    color: var(--dim);
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  h2 {
+    font: 400 30px/1.15 Georgia, "Iowan Old Style", "Times New Roman", serif;
+    color: var(--gold);
+    margin: 12px 0 2px;
+    letter-spacing: -.01em;
+  }
+  .latin {
+    font: italic 14px/1.4 Georgia, "Times New Roman", serif;
+    color: var(--dim);
+    margin: 0 0 18px;
+  }
+  .myth {
+    font: 16px/1.7 Georgia, "Iowan Old Style", "Times New Roman", serif;
+    color: #d7deec;
+    margin: 0;
+    max-width: 60ch;
+  }
+  dl {
+    margin: 22px 0 0;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 7px 18px;
+    font-size: 13.5px;
+  }
+  dt {
+    font: 600 10px/1.5 ui-monospace, Consolas, monospace;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--dim);
+    padding-top: 2px;
+  }
+  dd { margin: 0; color: #c6cede; }
+
+  .again {
+    margin: 18px auto 0;
+    display: none;
+    background: none;
+    border: none;
+    color: var(--dim);
+    font: 12px/1 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: .06em;
+    padding: 8px 4px;
+    cursor: pointer;
+    text-decoration: underline dotted;
+    text-underline-offset: 4px;
+  }
+  .again.on { display: block; }
+  .again:hover { color: var(--ink); border: none; }
+
+  footer {
+    color: #4d5568;
+    font-size: 12px;
+    margin-top: 34px;
+    text-align: center;
+    max-width: 46ch;
+  }
+
+  @media (max-width: 520px) {
+    .card { padding: 18px 18px 22px; }
+    h2 { font-size: 24px; }
+    dl { grid-template-columns: 1fr; gap: 2px 0; }
+    dt { margin-top: 10px; }
+  }
+</style>
+</head>
+<body>
+
+<h1>Minor Constellations</h1>
+
+<form id="form" autocomplete="off">
+  <input id="word" placeholder="name anything at all" maxlength="40" autofocus>
+  <button type="submit">CHART IT</button>
+</form>
+
+<div class="plate" id="plate">
+  <svg class="sky" id="sky" viewBox="0 0 100 60" aria-hidden="true"></svg>
+  <div class="card">
+    <div class="kicker"><span id="cat"></span><span id="coord"></span></div>
+    <h2 id="name"></h2>
+    <p class="latin" id="latin"></p>
+    <p class="myth" id="myth"></p>
+    <dl id="notes"></dl>
+  </div>
+</div>
+
+<button class="again" id="again">another astronomer disagrees</button>
+
+<footer>The same name always gives back the same sky. Nothing is saved, nothing is sent anywhere.</footer>
+
+<script>
+/* ============================================================ seeded random */
+function hash(str) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h >>> 0;
+}
+function rng(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const pick = (r, arr) => arr[Math.floor(r() * arr.length)];
+const range = (r, lo, hi) => lo + r() * (hi - lo);
+const intIn = (r, lo, hi) => Math.floor(range(r, lo, hi + 1));
+
+/* ================================================================= the lore */
+const DEITIES = [
+  'a minor god of thresholds',
+  'the goddess of things left running',
+  'an unnamed titan with a reputation for haste',
+  'the lesser of two sun gods',
+  'a god who was retiring that season',
+  'the god of Nearly',
+  'a demiurge on probation',
+  'the patron deity of the almost-correct',
+  'a sky-smith working from memory',
+  'the keeper of the second-best hours',
+];
+const ORIGINS = [
+  'Hung in the sky by {D}, who had been asked for something else entirely and did not wish to discuss it.',
+  'Set among the stars by {D} as a favor to no one in particular.',
+  'Placed here by {D} to settle an argument that no surviving account describes.',
+  'Nailed up by {D} at the end of a very long day.',
+  'Awarded the sky by {D} after a contest whose other entrants were never named.',
+  'Fixed in place by {D}, who was working in poor light.',
+  'Granted a position by {D} on the condition that it never be pointed out.',
+];
+const ACTS = [
+  'waiting',
+  'holding a door',
+  'being counted twice',
+  'refusing to be moved',
+  'arriving in the wrong season',
+  'not being where it was left',
+  'outlasting an argument',
+  'declining an honor it had not been offered',
+  'keeping a promise no one had made to it',
+  'being mistaken for something better',
+  'staying exactly as cold as it was found',
+  'going first, without being asked to',
+];
+const DURATIONS = [
+  'for nine years',
+  'for one afternoon',
+  'twice',
+  'continuously, and without complaint',
+  'until the tide changed',
+  'for precisely as long as was required',
+  'on a Tuesday',
+  'in front of witnesses',
+];
+const CONSEQUENCES = [
+  'Navigators are advised to use almost anything else.',
+  'No festival has ever been held in its honor.',
+  'It has been struck from three catalogues and restored to two.',
+  'Two temples were begun for it. Neither was finished, and both were later used for storage.',
+  'It appears in no surviving epic, though it does appear on a receipt.',
+  'Shepherds once used it to tell the time, incorrectly.',
+  'Its rising was long taken as an omen, until the omen was found to concern something else.',
+  'Scholars agree that it is there. Beyond that there is no agreement.',
+  'It is traditionally shown to visitors last, and briefly.',
+];
+const NEIGHBORS = [
+  'the Spare Key', 'the Second Sock', 'the Loose Thread', 'the Unread Manual',
+  'the Cold Cup', 'the Wrong Aisle', 'the Sixth Remote', 'the Lid',
+  'the Extra Screw', 'the Long Hold', 'the Fourth Cable', 'the Almost Chair',
+  'the Folded Map', 'the Quiet Drawer', 'the Ninth Tab', 'the Borrowed Pen',
+];
+const CONDITIONS = [
+  'only when you are not looking for it',
+  'faintly, and only in humid weather',
+  'from one hill in particular',
+  'whenever you are the last one awake',
+  'for eleven minutes after moonset',
+  'best on the night you decide not to go outside',
+  'clearly, to people who have already left',
+  'through a window, never in the open',
+];
+const EPITHETS = ['', '', '', '', ', Minor', ', the Lesser', ' (Disputed)', ', the Unremarkable'];
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
+                'July', 'August', 'September', 'October', 'November', 'December'];
+const GREEK = ['α', 'β', 'γ', 'δ', 'ε', 'ζ', 'η', 'θ', 'ι'];
+const IDLE = [
+  'the lid', 'hold music', 'a spare key', 'the last matching sock',
+  'an expired coupon', 'the good scissors', 'a cart with one bad wheel',
+  'the second cup of coffee', 'the drawer that sticks',
+];
+
+const titleCase = s => s.replace(/\b[a-z]/g, c => c.toUpperCase());
+const stripThe = s => s.replace(/^(the|a|an)\s+/i, '');
+
+function latinize(word) {
+  const stem = stripThe(word).toLowerCase().replace(/[^a-z]/g, '') || 'ignotum';
+  if (/a$/.test(stem)) return titleCase(stem + 'e');
+  if (/[aeiou]$/.test(stem)) return titleCase(stem.slice(0, -1) + 'is');
+  return titleCase(stem + 'is');
+}
+
+/* =========================================================== the star field */
+function makeStars(r) {
+  const want = intIn(r, 4, 9);
+  const pts = [];
+  let guard = 0;
+  while (pts.length < want && guard++ < 900) {
+    const p = { x: range(r, 14, 86), y: range(r, 12, 48) };
+    if (pts.every(q => Math.hypot(q.x - p.x, q.y - p.y) > 13)) {
+      p.mag = Math.round(range(r, 18, 66)) / 10;
+      pts.push(p);
+    }
+  }
+  pts.slice().sort((a, b) => a.mag - b.mag).forEach((p, i) => { p.rank = i; });
+  return pts;
+}
+
+/* nearest-neighbour chain, plus one spur once the figure is big enough */
+function makeLinks(r, pts) {
+  const left = pts.slice();
+  const chain = [left.splice(Math.floor(r() * left.length), 1)[0]];
+  while (left.length) {
+    const last = chain[chain.length - 1];
+    let best = 0;
+    left.forEach((p, i) => {
+      if (Math.hypot(p.x - last.x, p.y - last.y) <
+          Math.hypot(left[best].x - last.x, left[best].y - last.y)) best = i;
+    });
+    chain.push(left.splice(best, 1)[0]);
+  }
+  const paths = [chain];
+  if (chain.length >= 6 && r() < 0.7) {
+    const from = chain[intIn(r, 1, chain.length - 4)];
+    paths.push([from, chain[chain.length - 1]]);
+  }
+  return paths;
+}
+
+const pathOf = pts =>
+  pts.map((p, i) => (i ? 'L' : 'M') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ');
+
+function drawSky(r, pts, links, latin) {
+  const dust = [];
+  for (let i = 0; i < 150; i++) {
+    dust.push('<circle cx="' + range(r, 0, 100).toFixed(1) +
+      '" cy="' + range(r, 0, 60).toFixed(1) +
+      '" r="' + range(r, .12, .42).toFixed(2) +
+      '" style="animation-duration:' + range(r, 2.6, 7).toFixed(1) +
+      's;animation-delay:-' + range(r, 0, 7).toFixed(1) + 's"/>');
+  }
+  const lines = links.map(p => '<path d="' + pathOf(p) + '" pathLength="1"/>').join('');
+  const stars = pts.map((p, i) => {
+    const rad = (7.2 - p.mag) * 0.30 + 0.32;
+    /* a long name on a right-hand star would run off the plate, so it flips */
+    const flip = p.x > 50;
+    const label = p.rank < 3
+      ? '<text x="' + (flip ? p.x - rad - 1.3 : p.x + rad + 1.3).toFixed(2) +
+        '" y="' + (p.y - rad - 1.1).toFixed(2) + '"' + (flip ? ' text-anchor="end"' : '') + '>' +
+        GREEK[p.rank] + ' ' + latin + '</text>'
+      : '';
+    return '<g style="animation-delay:' + (0.35 + i * 0.13).toFixed(2) +
+      's;transform-origin:' + p.x.toFixed(2) + 'px ' + p.y.toFixed(2) + 'px">' +
+      '<circle class="halo" cx="' + p.x.toFixed(2) + '" cy="' + p.y.toFixed(2) +
+      '" r="' + (rad * 4.5).toFixed(2) + '"/>' +
+      '<circle cx="' + p.x.toFixed(2) + '" cy="' + p.y.toFixed(2) +
+      '" r="' + rad.toFixed(2) + '"/>' + label + '</g>';
+  }).join('');
+  return '<defs><radialGradient id="glow">' +
+         '<stop offset="0" stop-color="#ffe9b8" stop-opacity=".38"/>' +
+         '<stop offset="1" stop-color="#ffe9b8" stop-opacity="0"/>' +
+         '</radialGradient></defs>' +
+         '<g class="field">' + dust.join('') + '</g>' +
+         '<g class="links">' + lines + '</g>' +
+         '<g class="stars">' + stars + '</g>';
+}
+
+/* ================================================================= chart it */
+function chart(input, salt) {
+  const word = input.trim() || pick(rng(hash('idle' + salt)), IDLE);
+  const r = rng(hash(word.toLowerCase() + '|' + salt));
+
+  const pts = makeStars(r);
+  const links = makeLinks(r, pts);
+  const latin = latinize(word);
+  const bare = stripThe(word).toLowerCase();
+
+  const myth = [
+    pick(r, ORIGINS).replace('{D}', pick(r, DEITIES)),
+    'The ' + bare + ' is remembered for ' + pick(r, ACTS) + ', which it did ' +
+      pick(r, DURATIONS) + ', and for nothing else.',
+    pick(r, CONSEQUENCES),
+  ].join(' ');
+
+  const alpha = pts.reduce((a, b) => (a.mag < b.mag ? a : b)).mag;
+  const hour = intIn(r, 8, 10);                 // stays inside the evening
+  const until = hour + intIn(r, 1, 2);
+  let n1 = pick(r, NEIGHBORS), n2 = pick(r, NEIGHBORS);
+  while (n2 === n1) n2 = pick(r, NEIGHBORS);
+
+  return {
+    sky: drawSky(r, pts, links, latin),
+    name: 'The ' + titleCase(bare) + pick(r, EPITHETS),
+    latin: latin + ' · ' + pts.length + ' stars, ' +
+           intIn(r, 1, pts.length - 2) + ' of them worth the trip',
+    cat: 'MC-' + String(intIn(r, 100, 9999)).padStart(4, '0') +
+         String.fromCharCode(97 + intIn(r, 0, 25)),
+    coord: intIn(r, 0, 23) + 'h ' + String(intIn(r, 0, 59)).padStart(2, '0') + 'm · ' +
+           (r() < .5 ? '+' : '−') + intIn(r, 4, 71) + '°',
+    myth: myth,
+    notes: [
+      ['Best viewed', pick(r, MONTHS) + ', between ' + hour + ' and ' +
+        until + ' in the evening'],
+      ['Visible', pick(r, CONDITIONS)],
+      ['Brightest star', GREEK[0] + ' ' + latin + ', magnitude ' + alpha.toFixed(1) +
+        (alpha > 6 ? ' (below the unaided eye, but there)' : '')],
+      ['Bordered by', n1 + ' and ' + n2],
+    ],
+  };
+}
+
+/* =================================================================== render */
+const el = id => document.getElementById(id);
+let current = '', salt = 0;
+
+function show(input, nextSalt) {
+  current = input;
+  salt = nextSalt;
+  const c = chart(input, salt);
+  el('sky').innerHTML = c.sky;
+  el('name').textContent = c.name;
+  el('latin').textContent = c.latin;
+  el('cat').textContent = c.cat;
+  el('coord').textContent = c.coord;
+  el('myth').textContent = c.myth;
+  el('notes').innerHTML = c.notes
+    .map(row => '<dt>' + row[0] + '</dt><dd>' + row[1] + '</dd>').join('');
+  el('plate').classList.add('on');
+  el('again').classList.add('on');
+}
+
+function restage(input, nextSalt) {
+  el('plate').classList.remove('on');
+  void el('plate').offsetWidth;   // restart the entrance animation
+  show(input, nextSalt);
+}
+
+el('form').addEventListener('submit', e => {
+  e.preventDefault();
+  restage(el('word').value, 0);
+});
+
+el('again').addEventListener('click', () => restage(current, salt + 1));
+</script>
+</body>
+</html>
