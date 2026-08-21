@@ -1,0 +1,977 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paper Fold</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><g stroke='%238ea2ff' stroke-width='2.4' stroke-linecap='round' fill='none'><path d='M16 3v26M5.7 9.5l20.6 11M5.7 22.5l20.6-11'/></g></svg>">
+<style>
+  :root {
+    --bg: #0b0d12;
+    --panel: #141821;
+    --line: #262c3a;
+    --ink: #e8ecf5;
+    --dim: #7c8598;
+    --accent: #8ea2ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  header { padding: 20px 20px 4px; text-align: center; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; font-weight: 600; }
+  #layers { color: var(--accent); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; margin: 8px 0 0; }
+  /* reserve room for the longest hint so swapping it never resizes the stage */
+  #hint { color: var(--dim); margin: 6px auto 0; max-width: 46ch; min-height: 3em; }
+  @media (max-width: 560px) {
+    header { padding: 14px 16px 4px; }
+    #hint { min-height: 4.7em; }
+    button { padding: 10px 14px; }
+  }
+
+  /* the table the paper lies on */
+  #stage {
+    flex: 1 1 auto;
+    position: relative;
+    min-height: 220px;
+    background: radial-gradient(ellipse at 50% 42%, #171b25 0%, var(--bg) 68%);
+    touch-action: none;
+  }
+  /* sized entirely by CSS. The backing store follows it, never the other way
+     round, or a hint that wraps to an extra line leaves the canvas hanging
+     over the buttons. */
+  #c { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+  #stage.cutting { cursor: crosshair; }
+  #stage.foldable { cursor: pointer; }
+
+  footer {
+    display: flex; flex-wrap: wrap; gap: 10px;
+    justify-content: center; align-items: center;
+    padding: 14px 16px 22px;
+  }
+  button {
+    font: inherit;
+    color: var(--ink);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 18px;
+    cursor: pointer;
+    transition: border-color .15s, transform .1s;
+  }
+  button:hover { border-color: var(--accent); }
+  button:active { transform: translateY(1px); }
+  button.primary { border-color: var(--accent); color: var(--accent); }
+  button.quiet { color: var(--dim); padding: 10px 13px; }
+  button[hidden] { display: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Paper Fold</h1>
+  <p id="layers">1 layer</p>
+  <p id="hint"></p>
+</header>
+
+<div id="stage"><canvas id="c"></canvas></div>
+
+<footer>
+  <button id="bFold" class="primary">Fold it</button>
+  <button id="bSnip">Snip it</button>
+  <button id="bUnfold" class="primary">Unfold</button>
+  <button id="bKeep">Keep it</button>
+  <button id="bNew">New sheet</button>
+  <button id="bMute" class="quiet">Sound on</button>
+</footer>
+
+<script>
+/* ============================================================================
+   Paper space
+   ----------------------------------------------------------------------------
+   Everything geometric happens in one square coordinate system P x P with the
+   centre of the sheet at the origin. That centre is the pivot of every fold,
+   which is what lets an unfold be nothing but a list of reflection matrices.
+   ========================================================================== */
+
+const P    = 880;          // offscreen canvas size, px
+const S    = 800;          // side of the square sheet
+const C    = P / 2;        // centre of the offscreen canvas
+const RW   = S / 2;        // radius the ragged tip gets trimmed to at fold 3
+const KERF = 9;            // width of the scissor blade, paper-space px
+const INK  = 4;            // alpha above which a pixel counts as paper. Low on
+                           // purpose: the soft edge a cut leaves behind has to
+                           // travel with whichever side it belongs to, or the
+                           // sheet keeps a ghost outline of everything it lost.
+const D    = Math.PI / 180;
+const MAXF = 3;
+
+/* --- 2x2 matrices, stored row-major as [m00, m01, m10, m11] --------------- */
+const ident = () => [1, 0, 0, 1];
+const mul = (A, B) => [
+  A[0]*B[0] + A[1]*B[2], A[0]*B[1] + A[1]*B[3],
+  A[2]*B[0] + A[3]*B[2], A[2]*B[1] + A[3]*B[3],
+];
+
+/* reflection across the line through the origin at `deg` */
+function reflect(deg) {
+  const t = 2 * deg * D, c = Math.cos(t), s = Math.sin(t);
+  return [c, s, s, -c];
+}
+
+/* A fold caught mid-air. Seen from directly overhead, a folding flap is just
+   its own reflection squashed along the axis perpendicular to the crease: so
+   k = 1 is flat open, k = 0 is edge on and invisible, k = -1 is folded over. */
+function foldM(deg, k) {
+  const p = deg * D, c = Math.cos(p), s = Math.sin(p);
+  const b = c*s - k*s*c;
+  return [c*c + k*s*s, b, b, s*s + k*c*c];
+}
+
+/* ============================================================================
+   Which reflections put the sheet back together
+   ----------------------------------------------------------------------------
+   Folds run: half, half, thirds. Unfolding reverses that, so the thirds come
+   apart first. Each stage lists the copies that swing out during it, and a
+   copy that moved in an early stage keeps travelling in the later ones, which
+   is exactly what a lower layer of the stack does.
+   ========================================================================== */
+function buildUnfold(folds) {
+  const dims = [];
+  if (folds >= 3) dims.push({
+    elems:  [ident(), reflect(-60), mul(reflect(-30), reflect(-60))],
+    stages: [{ phi: -60, sel: d => d >= 1 }, { phi: -30, sel: d => d === 2 }],
+  });
+  if (folds >= 2) dims.push({
+    elems:  [ident(), reflect(90)],
+    stages: [{ phi: 90, sel: d => d === 1 }],
+  });
+  if (folds >= 1) dims.push({
+    elems:  [ident(), reflect(0)],
+    stages: [{ phi: 0, sel: d => d === 1 }],
+  });
+
+  const counts = dims.map(d => d.elems.length);
+  const total  = counts.reduce((a, b) => a * b, 1);
+  const digits = [], mats = [];
+
+  for (let i = 0; i < total; i++) {
+    let rem = i;
+    const dg = [];
+    for (const n of counts) { dg.push(rem % n); rem = Math.floor(rem / n); }
+    digits.push(dg);
+    let m = ident();
+    for (let k = dims.length - 1; k >= 0; k--) m = mul(m, dims[k].elems[dg[k]]);
+    mats.push(m);
+  }
+
+  const stages = [];
+  dims.forEach((d, k) => d.stages.forEach(s => {
+    const idx = [], inSet = new Uint8Array(total);
+    digits.forEach((dg, i) => { if (s.sel(dg[k])) { idx.push(i); inSet[i] = 1; } });
+    stages.push({ phi: s.phi, idx, inSet });
+  }));
+
+  return { mats, stages, total };
+}
+
+/* ============================================================================
+   Shapes of the folded stack
+   ========================================================================== */
+const sqR = a => (S / 2) / Math.max(Math.abs(Math.cos(a)), Math.abs(Math.sin(a)));
+
+/* the slice of the square between two angles, corners included */
+function sectorPath(g, a0, a1) {
+  g.beginPath();
+  g.moveTo(0, 0);
+  const angs = [a0];
+  for (const k of [-135, -45, 45, 135]) if (k > a0 && k < a1) angs.push(k);
+  angs.push(a1);
+  for (const a of angs) {
+    const r = sqR(a * D);
+    g.lineTo(r * Math.cos(a * D), r * Math.sin(a * D));
+  }
+  g.closePath();
+}
+
+function shapePath(g, f) {
+  g.beginPath();
+  if (f === 0)      g.rect(-S/2, -S/2, S, S);
+  else if (f === 1) g.rect(-S/2, -S/2, S, S/2);
+  else if (f === 2) g.rect(0, -S/2, S/2, S/2);
+  else { g.moveTo(0, 0); g.lineTo(0, -RW); g.arc(0, 0, RW, -90*D, -60*D); g.closePath(); }
+}
+
+function shapePts(f) {
+  if (f === 0) return [[-S/2,-S/2], [S/2,-S/2], [S/2,S/2], [-S/2,S/2]];
+  if (f === 1) return [[-S/2,-S/2], [S/2,-S/2], [S/2,0], [-S/2,0]];
+  if (f === 2) return [[0,-S/2], [S/2,-S/2], [S/2,0], [0,0]];
+  const p = [[0, 0]];
+  for (let a = -90; a <= -60; a += 5) p.push([RW*Math.cos(a*D), RW*Math.sin(a*D)]);
+  return p;
+}
+
+/* what the sheet becomes once it is open again */
+function openPts(f) {
+  if (f >= 3) {
+    const p = [];
+    for (let a = 0; a < 360; a += 15) p.push([RW*Math.cos(a*D), RW*Math.sin(a*D)]);
+    return p;
+  }
+  return [[-S/2,-S/2], [S/2,-S/2], [S/2,S/2], [-S/2,S/2]];
+}
+
+const foldLines = f =>
+    f >= 3 ? [0,30,60,90,120,150,180,210,240,270,300,330]
+  : f >= 2 ? [0, 90, 180, 270]
+  : f >= 1 ? [0, 180]
+  : [];
+
+/* ============================================================================
+   Sound. Scissors are noise bursts. Creases are the same burst, slowed down.
+   ========================================================================== */
+let AC = null, NOISE = null, muted = false;
+
+function ac() {
+  if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)();
+  if (AC.state === 'suspended') AC.resume();
+  return AC;
+}
+
+function noiseBuffer() {
+  if (NOISE) return NOISE;
+  const a = ac(), n = a.sampleRate;
+  NOISE = a.createBuffer(1, n, a.sampleRate);
+  const d = NOISE.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+  return NOISE;
+}
+
+function burst({ dur = 0.08, f = 2000, q = 1, gain = 0.2, sweep = 0 }) {
+  if (muted) return;
+  try {
+    const a = ac(), t = a.currentTime;
+    const src = a.createBufferSource();
+    src.buffer = noiseBuffer();
+    src.playbackRate.value = 0.8 + Math.random() * 0.5;
+    const flt = a.createBiquadFilter();
+    flt.type = 'bandpass';
+    flt.Q.value = q;
+    flt.frequency.setValueAtTime(f, t);
+    if (sweep) flt.frequency.linearRampToValueAtTime(Math.max(140, f + sweep), t + dur);
+    const g = a.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(gain, t + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(flt); flt.connect(g); g.connect(a.destination);
+    src.start(t, Math.random() * 0.5);
+    src.stop(t + dur + 0.03);
+  } catch (e) { /* no audio, no problem */ }
+}
+
+const sfx = {
+  snip()   { burst({ dur: 0.05, f: 3400, q: 0.9, gain: 0.16 });
+             setTimeout(() => burst({ dur: 0.06, f: 2500, q: 1.2, gain: 0.13 }), 55); },
+  crease() { burst({ dur: 0.24, f: 950,  q: 0.6, gain: 0.13, sweep: 800 }); },
+  rustle() { burst({ dur: 0.55, f: 1700, q: 0.4, gain: 0.11, sweep: -1100 }); },
+  tick()   { burst({ dur: 0.04, f: 5200, q: 1.6, gain: 0.05 }); },
+};
+
+/* ============================================================================
+   Canvases. `wedge` holds the folded stack. `full` holds whatever is on screen.
+   ========================================================================== */
+function off() {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = P;
+  return cv;
+}
+const wedge = off(), wctx = wedge.getContext('2d', { willReadFrequently: true });
+const full  = off(), fctx = full.getContext('2d',  { willReadFrequently: true });
+
+const canvas  = document.getElementById('c');
+const ctx     = canvas.getContext('2d');
+const stageEl = document.getElementById('stage');
+let dpr = 1, stage = { w: 1, h: 1 };
+
+/* paper texture, made once */
+const noiseTile = (() => {
+  const n = document.createElement('canvas');
+  n.width = n.height = 96;
+  const g = n.getContext('2d');
+  const im = g.createImageData(96, 96);
+  for (let i = 0; i < im.data.length; i += 4) {
+    const dark = Math.random() < 0.5;
+    im.data[i]     = dark ? 96  : 255;
+    im.data[i + 1] = dark ? 88  : 253;
+    im.data[i + 2] = dark ? 68  : 244;
+    im.data[i + 3] = Math.random() * (dark ? 15 : 22);
+  }
+  g.putImageData(im, 0, 0);
+  return g.createPattern(n, 'repeat');
+})();
+
+function paintPaper(g, pathFn) {
+  g.save();
+  pathFn(g);
+  g.clip();
+  const grd = g.createLinearGradient(-S/2, -S/2, S/2, S/2);
+  grd.addColorStop(0, '#f8f3e8');
+  grd.addColorStop(1, '#e6ddc9');
+  g.fillStyle = grd;
+  g.fillRect(-C, -C, P, P);
+  g.fillStyle = noiseTile;
+  g.fillRect(-C, -C, P, P);
+  /* a stroke clipped to its own shape leaves only the inner half, which reads
+     as the thickness of the stack */
+  g.strokeStyle = 'rgba(116,102,74,.30)';
+  g.lineWidth = 3;
+  pathFn(g);
+  g.stroke();
+  g.restore();
+}
+
+function buildWedge(f) {
+  wctx.setTransform(1, 0, 0, 1, C, C);
+  wctx.clearRect(-C, -C, P, P);
+  paintPaper(wctx, g => shapePath(g, f));
+}
+
+/* ============================================================================
+   Camera. One similarity transform, lerped, so the view opens out with the paper.
+   ========================================================================== */
+let pose = { rot: 0, sc: 1, ox: 0, oy: 0 };
+let want = { rot: 0, sc: 1, ox: 0, oy: 0 };
+
+function poseFor(pts, rot, fill) {
+  const c = Math.cos(rot), s = Math.sin(rot);
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  for (const [x, y] of pts) {
+    const X = c*x - s*y, Y = s*x + c*y;
+    if (X < x0) x0 = X;
+    if (X > x1) x1 = X;
+    if (Y < y0) y0 = Y;
+    if (Y > y1) y1 = Y;
+  }
+  const sc = Math.min(stage.w / (x1 - x0), stage.h / (y1 - y0)) * fill;
+  return { rot, sc, ox: stage.w/2 - sc*(x0 + x1)/2, oy: stage.h/2 - sc*(y0 + y1)/2 };
+}
+
+function toScreen(x, y) {
+  const c = Math.cos(pose.rot), s = Math.sin(pose.rot);
+  return [pose.ox + pose.sc * (c*x - s*y), pose.oy + pose.sc * (s*x + c*y)];
+}
+
+function toPaper(X, Y) {
+  const c = Math.cos(-pose.rot), s = Math.sin(-pose.rot);
+  const x = (X - pose.ox) / pose.sc, y = (Y - pose.oy) / pose.sc;
+  return [c*x - s*y, s*x + c*y];
+}
+
+/* ============================================================================
+   State
+   ========================================================================== */
+let st, U, cur, scraps, drag, anim;
+
+function reset() {
+  st = { folds: 0, phase: 'folding', cuts: 0, area: S * S, thin: false };
+  U = buildUnfold(0);
+  cur = [ident()];
+  scraps = [];
+  drag = null;
+  anim = null;
+  buildWedge(0);
+  composite([ident()]);
+  retarget(true);
+  sync();
+}
+
+function retarget(snap) {
+  const rot = st.folds >= 3 ? -15 * D : 0;
+  if (st.phase === 'done') {
+    /* close in on what actually survived, but only so far. The paper is a
+       raster, and past half again the size the whole sheet would have been,
+       the scissor marks turn to fog. */
+    const sheet = poseFor(openPts(st.folds), rot, 0.84);
+    const left = contentPts();
+    want = left ? poseFor(left, rot, 0.84) : sheet;
+    if (want.sc > sheet.sc * 1.7) rescale(want, sheet.sc * 1.7);
+  } else {
+    /* mid-unfold, frame the whole sheet so the swinging copies have room */
+    const pts = st.phase === 'unfolding' ? openPts(st.folds) : shapePts(st.folds);
+    want = poseFor(pts, rot, 0.84);
+  }
+  if (snap) pose = { rot: want.rot, sc: want.sc, ox: want.ox, oy: want.oy };
+}
+
+/* change a pose's zoom without letting what it was framing drift off centre */
+function rescale(p, sc) {
+  p.ox = stage.w/2 + (p.ox - stage.w/2) * sc / p.sc;
+  p.oy = stage.h/2 + (p.oy - stage.h/2) * sc / p.sc;
+  p.sc = sc;
+}
+
+/* the corners of whatever is left on the composited sheet, in paper space */
+function contentPts() {
+  const a = fctx.getImageData(0, 0, P, P).data;
+  let x0 = P, y0 = P, x1 = -1, y1 = -1;
+  for (let y = 0; y < P; y++) for (let x = 0; x < P; x++) {
+    if (a[(y * P + x) * 4 + 3] > INK) {
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+    }
+  }
+  if (x1 < x0) return null;
+  return [[x0 - C, y0 - C], [x1 - C, y0 - C], [x1 - C, y1 - C], [x0 - C, y1 - C]];
+}
+
+/* ============================================================================
+   Compositing
+   ========================================================================== */
+function composite(mats) {
+  fctx.setTransform(1, 0, 0, 1, 0, 0);
+  fctx.clearRect(0, 0, P, P);
+  for (const m of mats) {
+    fctx.setTransform(m[0], m[2], m[1], m[3], C, C);
+    fctx.drawImage(wedge, -C, -C);
+  }
+}
+
+/* faint creases where the layers used to be stacked */
+function addCreases() {
+  fctx.setTransform(1, 0, 0, 1, C, C);
+  fctx.globalCompositeOperation = 'source-atop';
+  fctx.strokeStyle = 'rgba(116,102,74,.20)';
+  fctx.lineWidth = 1.3;
+  for (const a of foldLines(st.folds)) {
+    fctx.beginPath();
+    fctx.moveTo(0, 0);
+    fctx.lineTo(S * Math.cos(a * D), S * Math.sin(a * D));
+    fctx.stroke();
+  }
+  fctx.globalCompositeOperation = 'source-over';
+}
+
+/* ============================================================================
+   Folding. The paper is blank until the last fold lands, so these frames get
+   drawn straight from paths rather than from the wedge image.
+   ========================================================================== */
+function foldFrame(f, sub, k) {
+  fctx.setTransform(1, 0, 0, 1, C, C);
+  fctx.clearRect(-C, -C, P, P);
+
+  let still, flap, phi;
+  if (f === 1) {
+    still = g => { g.beginPath(); g.rect(-S/2, -S/2, S, S/2); };
+    flap  = g => { g.beginPath(); g.rect(-S/2, 0, S, S/2); };
+    phi   = 0;
+  } else if (f === 2) {
+    still = g => { g.beginPath(); g.rect(0, -S/2, S/2, S/2); };
+    flap  = g => { g.beginPath(); g.rect(-S/2, -S/2, S/2, S/2); };
+    phi   = 90;
+  } else {
+    phi   = sub === 0 ? -30 : -60;
+    still = g => sectorPath(g, -90, phi);
+    flap  = g => sectorPath(g, phi, sub === 0 ? 0 : -30);
+  }
+
+  paintPaper(fctx, still);
+  const m = foldM(phi, k);
+  fctx.save();
+  fctx.transform(m[0], m[2], m[1], m[3], 0, 0);
+  paintPaper(fctx, flap);
+  fctx.restore();
+
+  /* the crease itself */
+  const r = phi * D;
+  fctx.strokeStyle = 'rgba(116,102,74,.5)';
+  fctx.lineWidth = 1.5;
+  fctx.beginPath();
+  fctx.moveTo(-S * Math.cos(r), -S * Math.sin(r));
+  fctx.lineTo(S * Math.cos(r), S * Math.sin(r));
+  fctx.stroke();
+}
+
+function startFold() {
+  if (st.phase !== 'folding' || st.folds >= MAXF || anim) return;
+  anim = { kind: 'fold', f: st.folds + 1, sub: 0, t: 0, dur: 0.46 };
+  sfx.crease();
+  sync();
+}
+
+function finishFold(f) {
+  st.folds = f;
+  st.area = f === 3 ? Math.PI * RW * RW / 12 : S * S / Math.pow(2, f);
+  U = buildUnfold(f);
+  cur = U.mats.map(() => ident());
+  buildWedge(f);
+  if (f === 3) trimTip();
+  composite([ident()]);
+  /* twelve layers is where everyone stops, so stop there */
+  if (f >= MAXF) st.phase = 'cutting';
+  retarget();
+  sync();
+}
+
+/* Folding a square into thirds leaves a ragged tip sticking out past the rest
+   of the stack. Everybody trims it flat, so the toy trims it and lets the
+   sliver fall. */
+function trimTip() {
+  const sliver = off();
+  const sg = sliver.getContext('2d');
+  sg.setTransform(1, 0, 0, 1, C, C);
+  sg.drawImage(wedge, -C, -C);
+  sg.globalCompositeOperation = 'destination-in';
+  sectorPath(sg, -90, -60);
+  sg.fill();
+  sg.globalCompositeOperation = 'destination-out';
+  sg.beginPath();
+  sg.arc(0, 0, RW, 0, Math.PI * 2);
+  sg.fill();
+  scraps.push(makeScrap(sliver, -C, -C));
+  sfx.snip();
+}
+
+/* ============================================================================
+   Cutting
+   ========================================================================== */
+function resample(pts, step) {
+  const out = [pts[0].slice()];
+  let cx = pts[0][0], cy = pts[0][1];
+  for (let i = 1; i < pts.length; i++) {
+    const tx = pts[i][0], ty = pts[i][1];
+    let d = Math.hypot(tx - cx, ty - cy);
+    while (d >= step) {
+      const t = step / d;
+      cx += (tx - cx) * t;
+      cy += (ty - cy) * t;
+      out.push([cx, cy]);
+      d = Math.hypot(tx - cx, ty - cy);
+    }
+  }
+  out.push(pts[pts.length - 1].slice());
+  return out;
+}
+
+/* nobody cuts a straight line, so neither does this */
+function handCut(pts) {
+  if (pts.length < 3) return pts;
+  const p1 = Math.random() * 6.28, p2 = Math.random() * 6.28;
+  return pts.map((p, i) => {
+    const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
+    const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1;
+    const w = Math.sin(i * 0.31 + p1) * 1.0 + Math.sin(i * 0.11 + p2) * 0.7;
+    return [p[0] + (-dy / L) * w, p[1] + (dx / L) * w];
+  });
+}
+
+function commitCut(pts) {
+  if (pts.length < 2) return;
+  const path = handCut(resample(pts, 4));
+  wctx.setTransform(1, 0, 0, 1, C, C);
+  wctx.globalCompositeOperation = 'destination-out';
+  wctx.lineWidth = KERF;
+  wctx.lineCap = 'round';
+  wctx.lineJoin = 'round';
+  wctx.strokeStyle = '#000';
+  wctx.beginPath();
+  wctx.moveTo(path[0][0], path[0][1]);
+  for (let i = 1; i < path.length; i++) wctx.lineTo(path[i][0], path[i][1]);
+  wctx.stroke();
+  wctx.globalCompositeOperation = 'source-over';
+
+  st.cuts++;
+  sfx.snip();
+
+  const r = harvest(settle());
+  if (r.dropped) setTimeout(sfx.tick, 110);
+  st.thin = r.kept < st.area * 0.2;
+  if (!r.kept) { st.phase = 'ruined'; sfx.rustle(); }
+
+  composite([ident()]);
+  sync();
+}
+
+/* Open the whole sheet out and ask which pixels still hang off the centre.
+   Connectivity has to be judged open, not folded: a piece can look loose in
+   the stack and still be joined to its own mirror image across a crease. */
+function settle() {
+  composite(U.mats);
+  const a = fctx.getImageData(0, 0, P, P).data;
+  const n = P * P;
+  const paper = new Uint8Array(n);
+  for (let i = 0; i < n; i++) paper[i] = a[i*4 + 3] > INK ? 1 : 0;
+
+  const seen = new Uint8Array(n);
+  const stack = new Int32Array(n);
+  let sp = 0;
+
+  /* seed from a small disc rather than the single centre pixel, which sits on
+     a twelve-way corner and can be swallowed by antialiasing */
+  const c0 = C | 0;
+  for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+    const i = (c0 + dy) * P + (c0 + dx);
+    if (paper[i] && !seen[i]) { seen[i] = 1; stack[sp++] = i; }
+  }
+  while (sp > 0) {
+    const i = stack[--sp], x = i % P;
+    if (x > 0     && paper[i-1] && !seen[i-1]) { seen[i-1] = 1; stack[sp++] = i-1; }
+    if (x < P - 1 && paper[i+1] && !seen[i+1]) { seen[i+1] = 1; stack[sp++] = i+1; }
+    if (i >= P    && paper[i-P] && !seen[i-P]) { seen[i-P] = 1; stack[sp++] = i-P; }
+    if (i < n - P && paper[i+P] && !seen[i+P]) { seen[i+P] = 1; stack[sp++] = i+P; }
+  }
+  return seen;
+}
+
+/* Lift every pixel of the stack that is no longer attached, and let it fall.
+   Reports how much paper is still hanging off the centre afterwards. */
+function harvest(seen) {
+  const img = wctx.getImageData(0, 0, P, P);
+  const w = img.data;
+  const n = P * P;
+  const loose = new Uint8Array(n);
+  let any = false, kept = 0;
+  for (let i = 0; i < n; i++) {
+    if (w[i*4 + 3] <= INK) continue;
+    if (seen[i]) kept++;
+    else { loose[i] = 1; any = true; }
+  }
+  if (!any) return { kept, dropped: false };
+
+  const lab = new Uint8Array(n);
+  const stack = new Int32Array(n);
+  const NB = [-1, 1, -P, P, -P-1, -P+1, P-1, P+1];
+  let dropped = false;
+
+  for (let s = 0; s < n; s++) {
+    if (!loose[s] || lab[s]) continue;
+    let sp = 0;
+    stack[sp++] = s;
+    lab[s] = 1;
+    const pix = [];
+    let x0 = P, y0 = P, x1 = 0, y1 = 0;
+    while (sp > 0) {
+      const i = stack[--sp];
+      pix.push(i);
+      const x = i % P, y = (i / P) | 0;
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+      for (const d of NB) {
+        const j = i + d;
+        if (j < 0 || j >= n) continue;
+        if (Math.abs((j % P) - x) > 1) continue;   /* do not wrap round the row */
+        if (loose[j] && !lab[j]) { lab[j] = 1; stack[sp++] = j; }
+      }
+    }
+    /* pull it out of the stack whatever its size, but only bother animating
+       what is big enough to see */
+    const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+    let sc = null, sim = null;
+    if (pix.length >= 24) {
+      sc = document.createElement('canvas');
+      sc.width = bw;
+      sc.height = bh;
+      sim = sc.getContext('2d').createImageData(bw, bh);
+    }
+    for (const i of pix) {
+      const x = i % P, y = (i / P) | 0;
+      if (sim) {
+        const k = ((y - y0) * bw + (x - x0)) * 4;
+        sim.data[k]     = w[i*4];
+        sim.data[k + 1] = w[i*4 + 1];
+        sim.data[k + 2] = w[i*4 + 2];
+        sim.data[k + 3] = w[i*4 + 3];
+      }
+      w[i*4 + 3] = 0;
+    }
+    if (sim) {
+      sc.getContext('2d').putImageData(sim, 0, 0);
+      scraps.push(makeScrap(sc, x0 - C, y0 - C));
+      dropped = true;
+    }
+  }
+  wctx.putImageData(img, 0, 0);
+  return { kept, dropped };
+}
+
+/* Scraps switch to screen space the moment they come off, so the camera can
+   keep moving without dragging them along with it. */
+function makeScrap(cv, px, py) {
+  const p = toScreen(px + cv.width / 2, py + cv.height / 2);
+  return {
+    cv, x: p[0], y: p[1], sc: pose.sc, rot: pose.rot,
+    vx: (Math.random() - 0.5) * 90,
+    vy: -30 - Math.random() * 50,
+    vr: (Math.random() - 0.5) * 2.4,
+    ph: Math.random() * 6.28,
+    a: 1,
+  };
+}
+
+/* ============================================================================
+   Unfolding
+   ========================================================================== */
+function startUnfold() {
+  if (st.phase !== 'cutting' || anim) return;
+  cur = U.mats.map(() => ident());
+  anim = { kind: 'open', stage: 0, t: 0, dur: 0.42 };
+  st.phase = 'unfolding';
+  retarget();
+  sfx.rustle();
+  sync();
+}
+
+const easeIO = t => t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t + 2, 2) / 2;
+
+/* ============================================================================
+   Frame
+   ========================================================================== */
+let last = 0;
+
+function frame(ts) {
+  const dt = Math.min(0.05, (ts - last) / 1000 || 0);
+  last = ts;
+
+  const g = 1 - Math.pow(0.001, dt);
+  pose.rot += (want.rot - pose.rot) * g;
+  pose.sc  += (want.sc  - pose.sc)  * g;
+  pose.ox  += (want.ox  - pose.ox)  * g;
+  pose.oy  += (want.oy  - pose.oy)  * g;
+
+  if (anim && anim.kind === 'fold') {
+    anim.t += dt / anim.dur;
+    foldFrame(anim.f, anim.sub, 1 - 2 * easeIO(Math.min(1, anim.t)));
+    if (anim.t >= 1) {
+      if (anim.f === 3 && anim.sub === 0) {
+        anim = { kind: 'fold', f: 3, sub: 1, t: 0, dur: 0.4 };
+        sfx.crease();
+      } else {
+        const f = anim.f;
+        anim = null;
+        finishFold(f);
+      }
+    }
+  } else if (anim && anim.kind === 'open') {
+    const stg = U.stages[anim.stage];
+    anim.t += dt / anim.dur;
+    const m = foldM(stg.phi, 1 - 2 * easeIO(Math.min(1, anim.t)));
+    composite(cur.map((c, i) => stg.inSet[i] ? mul(m, c) : c));
+    if (anim.t >= 1) {
+      const R = reflect(stg.phi);
+      for (const i of stg.idx) cur[i] = mul(R, cur[i]);
+      anim.stage++;
+      anim.t = 0;
+      if (anim.stage >= U.stages.length) {
+        anim = null;
+        st.phase = 'done';
+        composite(U.mats);
+        addCreases();
+        retarget();
+        sync();
+      } else sfx.rustle();
+    }
+  }
+
+  for (const s of scraps) {
+    s.vy += 620 * dt;
+    s.vx += Math.sin(ts / 260 + s.ph) * 26 * dt;
+    s.x += s.vx * dt;
+    s.y += s.vy * dt;
+    s.rot += s.vr * dt;
+    if (s.y > stage.h + 120) s.a -= dt * 3;
+  }
+  scraps = scraps.filter(s => s.a > 0);
+
+  render();
+  requestAnimationFrame(frame);
+}
+
+function render() {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, stage.w, stage.h);
+
+  ctx.save();
+  ctx.translate(pose.ox, pose.oy);
+  ctx.rotate(pose.rot);
+  ctx.scale(pose.sc, pose.sc);
+  ctx.shadowColor = 'rgba(0,0,0,.55)';
+  ctx.shadowBlur = 26 * dpr;
+  ctx.shadowOffsetY = 12 * dpr;
+  ctx.drawImage(full, -C, -C);
+  ctx.restore();
+
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,.45)';
+  ctx.shadowBlur = 12 * dpr;
+  ctx.shadowOffsetY = 6 * dpr;
+  for (const s of scraps) {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, s.a);
+    ctx.translate(s.x, s.y);
+    ctx.rotate(s.rot);
+    ctx.scale(s.sc, s.sc);
+    ctx.drawImage(s.cv, -s.cv.width / 2, -s.cv.height / 2);
+    ctx.restore();
+  }
+  ctx.restore();
+
+  if (drag && drag.pts.length > 1) {
+    ctx.save();
+    ctx.beginPath();
+    const p0 = toScreen(drag.pts[0][0], drag.pts[0][1]);
+    ctx.moveTo(p0[0], p0[1]);
+    for (let i = 1; i < drag.pts.length; i++) {
+      const p = toScreen(drag.pts[i][0], drag.pts[i][1]);
+      ctx.lineTo(p[0], p[1]);
+    }
+    ctx.strokeStyle = 'rgba(18,22,30,.5)';
+    ctx.lineWidth = Math.max(2, KERF * pose.sc * 0.5);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+    const h = toScreen(drag.pts[drag.pts.length - 1][0], drag.pts[drag.pts.length - 1][1]);
+    ctx.beginPath();
+    ctx.arc(h[0], h[1], Math.max(3, KERF * pose.sc * 0.36), 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(142,162,255,.85)';
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+/* ============================================================================
+   Input
+   ========================================================================== */
+stageEl.addEventListener('pointerdown', e => {
+  ac();
+  if (anim) return;
+  if (st.phase === 'folding') { startFold(); return; }
+  if (st.phase !== 'cutting') return;
+  const r = canvas.getBoundingClientRect();
+  drag = { id: e.pointerId, pts: [toPaper(e.clientX - r.left, e.clientY - r.top)] };
+  stageEl.setPointerCapture(e.pointerId);
+});
+
+stageEl.addEventListener('pointermove', e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  const r = canvas.getBoundingClientRect();
+  const p = toPaper(e.clientX - r.left, e.clientY - r.top);
+  const q = drag.pts[drag.pts.length - 1];
+  if (Math.hypot(p[0] - q[0], p[1] - q[1]) > 2) drag.pts.push(p);
+});
+
+function endDrag(e) {
+  if (!drag || e.pointerId !== drag.id) return;
+  const pts = drag.pts;
+  drag = null;
+  commitCut(pts);
+}
+stageEl.addEventListener('pointerup', endDrag);
+stageEl.addEventListener('pointercancel', endDrag);
+
+/* ============================================================================
+   Chrome
+   ========================================================================== */
+const els = {
+  hint:   document.getElementById('hint'),
+  layers: document.getElementById('layers'),
+  fold:   document.getElementById('bFold'),
+  snip:   document.getElementById('bSnip'),
+  unfold: document.getElementById('bUnfold'),
+  keep:   document.getElementById('bKeep'),
+  neu:    document.getElementById('bNew'),
+  mute:   document.getElementById('bMute'),
+};
+
+const LAYERS = [1, 2, 4, 12];
+
+function hintText() {
+  if (anim) return anim.kind === 'open' ? 'Opening.' : 'Creasing.';
+  switch (st.phase) {
+    case 'folding':
+      if (st.folds === 0) return 'One square of paper. Fold it.';
+      if (st.folds === 1) return 'Folded once. Fold again, or start snipping now.';
+      return 'Folded twice. One more fold gives you six points.';
+    case 'cutting':
+      return st.cuts === 0
+        ? 'Drag across the paper to snip. Take some out of the wide end as well, and mind the point at the bottom, which is the middle of the sheet.'
+        : st.thin
+        ? 'Not much left to hold it together. This is going to be a delicate one.'
+        : 'You cannot see what you are making. That is the whole idea. Unfold when you have had enough.';
+    case 'unfolding': return 'Opening.';
+    case 'done':      return 'There it is. You did not design that.';
+    case 'ruined':    return 'You cut through the middle and it fell apart. Happens to everyone.';
+  }
+  return '';
+}
+
+function sync() {
+  els.hint.textContent = hintText();
+  const n = LAYERS[st.folds];
+  els.layers.textContent = n === 1 ? '1 layer' : n + ' layers';
+  const busy = !!anim;
+  els.fold.hidden   = busy || st.phase !== 'folding' || st.folds >= MAXF;
+  els.snip.hidden   = busy || st.phase !== 'folding' || st.folds < 1;
+  els.unfold.hidden = busy || st.phase !== 'cutting';
+  els.keep.hidden   = st.phase !== 'done';
+  els.neu.hidden    = busy;
+  stageEl.className = st.phase === 'cutting' ? 'cutting'
+                    : st.phase === 'folding' ? 'foldable' : '';
+}
+
+els.fold.onclick   = () => { ac(); startFold(); };
+els.snip.onclick   = () => { ac(); st.phase = 'cutting'; sync(); };
+els.unfold.onclick = () => { ac(); startUnfold(); };
+els.neu.onclick    = () => { ac(); reset(); };
+els.mute.onclick   = () => {
+  muted = !muted;
+  els.mute.textContent = muted ? 'Sound off' : 'Sound on';
+};
+els.keep.onclick = () => {
+  const E = 1400, k = E / P;
+  const e = document.createElement('canvas');
+  e.width = e.height = E;
+  const g = e.getContext('2d');
+  g.setTransform(k, 0, 0, k, 0, 0);
+  g.drawImage(full, 0, 0);
+  const a = document.createElement('a');
+  a.download = 'snowflake.png';
+  a.href = e.toDataURL('image/png');
+  a.click();
+};
+
+let firstFit = true;
+function resize() {
+  const r = stageEl.getBoundingClientRect();
+  if (r.width < 1 || r.height < 1) return;
+  dpr = Math.min(2, window.devicePixelRatio || 1);
+  stage.w = r.width;
+  stage.h = r.height;
+  canvas.width  = Math.round(r.width * dpr);
+  canvas.height = Math.round(r.height * dpr);
+  /* only the opening frame snaps; after that let the camera glide, so a hint
+     that wraps to a new line does not jerk the paper */
+  retarget(firstFit);
+  firstFit = false;
+}
+/* watch the stage itself, not the window: the header changes height whenever
+   the hint text wraps differently, and the stage has to keep up */
+new ResizeObserver(resize).observe(stageEl);
+
+reset();
+resize();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
