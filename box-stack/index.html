@@ -22,6 +22,10 @@
   }
   .hud button:hover { background: rgba(255,255,255,.14); }
   .hint { position: fixed; right: 14px; bottom: 12px; color: #e0d3bd; opacity: .36; user-select: none; text-align: right; }
+  @media (max-width: 560px) {
+    .hud { left: 10px; bottom: 9px; }
+    .hint { right: 10px; bottom: 9px; font-size: 11px; max-width: 52%; }
+  }
 </style>
 </head>
 <body>
@@ -485,7 +489,7 @@ const CATALOG = [
 ];
 
 const DENSITY = 200;   // kg per cubic metre-ish. Only the ratios matter.
-const SCALE = 300;     // pixels per metre
+const SCALE_FULL = 300;   // pixels per metre on a roomy screen
 
 /* ------------------------------ scene ----------------------------- */
 
@@ -493,8 +497,23 @@ const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 
 let W = 0, H = 0, DPR = 1;
-const SHELF_W = 196;   // pixels of shelf furniture down the left edge
-const FLOOR_H = 74;    // pixels of carpet at the bottom
+
+/* A phone is not a small desktop. At full scale the widest box is 120px, so on
+   a 390px screen the shelf furniture and one box eat the entire room and there
+   is nowhere left to rattle anything. FIT shrinks the whole world instead: the
+   boxes keep their real proportions, the floor just gets wider in box-widths.
+   FIT is pinned at 1 from roughly a tablet upward, so desktop is untouched. */
+let FIT = 1;
+let SCALE = SCALE_FULL;   // pixels per metre
+let SHELF_W = 196;        // pixels of shelf furniture down the left edge
+let FLOOR_H = 74;         // pixels of carpet at the bottom
+
+function fitToViewport() {
+  FIT = Math.max(0.55, Math.min(1, Math.min(W / 820, H / 620)));
+  SCALE = SCALE_FULL * FIT;
+  SHELF_W = Math.round(Math.max(96, Math.min(196, W * 0.3)));
+  FLOOR_H = Math.round(Math.max(44, 74 * FIT));
+}
 
 let shelf = [];        // catalogue entries still on the shelf, top of list = top of pile
 let floor = null, wallL = null, wallR = null;
@@ -505,6 +524,7 @@ let hoverIndex = -1;
 function resize() {
   DPR = Math.min(2, window.devicePixelRatio || 1);
   W = window.innerWidth; H = window.innerHeight;
+  fitToViewport();
   canvas.width = Math.round(W * DPR);
   canvas.height = Math.round(H * DPR);
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
@@ -538,15 +558,24 @@ function reshelve() {
 /* Boxes lie flat and stacked, the way a real collection actually sits,
    so what you see on the shelf is a pile of spines. */
 
+/* The shelf is furniture, not part of the room: its spines keep the same
+   readable, finger-sized geometry at every viewport, in pixels rather than
+   metres. Only the room the boxes get thrown around in shrinks. */
+
 function shelfSlots() {
-  const slots = [];
-  const pad = 18;
+  const pad = Math.round(SHELF_W * 0.092);
   const maxW = SHELF_W - pad * 2;
+  const thick = shelf.map(g => Math.max(13, g.d * SCALE_FULL * 2.4));
+  const total = thick.reduce((a, b) => a + b, 0);
+  const room = H - FLOOR_H - 26;
+  const squeeze = total > room ? room / total : 1;   // a short window thins the spines
+
+  const slots = [];
   let y = H - FLOOR_H - 16;
   for (let i = shelf.length - 1; i >= 0; i--) {
     const g = shelf[i];
-    const th = Math.max(13, g.d * SCALE * 2.4);
-    const bw = Math.min(maxW, g.w * SCALE * 0.62);
+    const th = thick[i] * squeeze;
+    const bw = Math.min(maxW, g.w * SCALE_FULL * 0.62);
     y -= th;
     slots.push({ index: i, game: g, x: pad + (maxW - bw) / 2, y, w: bw, h: th });
   }
@@ -660,6 +689,11 @@ window.addEventListener('keydown', (e) => {
 
 document.getElementById('reshelve').addEventListener('click', reshelve);
 window.addEventListener('resize', resize);
+
+// A finger has no wheel, so do not promise one.
+if (window.matchMedia('(pointer: coarse)').matches) {
+  document.querySelector('.hint').textContent = 'drag a box off the shelf · fling it to send it skidding';
+}
 
 /* ----------------------------- rendering -------------------------- */
 
